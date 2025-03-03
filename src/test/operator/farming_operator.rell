@@ -1,0 +1,256 @@
+@test module;
+
+import lib.ft4.test.utils. { ft_auth_operation_for };
+import lib.ft4.external.assets.{ get_asset_balance} ;
+import lib.ft4.external.accounts. { get_accounts_by_signer, get_account_by_id};
+import contracts.common.*;
+import contracts.masterchef.*;
+import lib.ft4.external.admin. { mint, register_asset };
+
+import lib.ft4.external.accounts.strategies. { register_account };
+import lib.ft4.core.accounts.strategies.transfer.fee. { ras_transfer_fee };
+import lib.ft4.external.assets.{ transfer };
+val alice = rell.test.pubkeys.alice;
+val bob = rell.test.pubkeys.bob;
+val charlie = rell.test.pubkeys.charlie;
+val alice_kp = rell.test.keypairs.alice;
+val bob_kp = rell.test.keypairs.bob;
+val charlie_kp = rell.test.keypairs.charlie;
+val admin_pub = x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06";
+ val admin_kp = rell.test.keypair(
+        priv = x"DACA68A6085937879759F316D51310DFB5FB23006B1B5DFA63AE01308D17F67D",
+        pub = x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06"
+    );
+
+function deploy_token_script(asset_name: name, symbol: text, decimals: integer, icon_url: text) {
+    rell.test.tx()
+        .nop()
+        .op(register_asset(asset_name, symbol, decimals, icon_url))
+        .sign(admin_kp)
+        .run();
+}
+
+function register_account_script(user_kp: rell.test.keypair) {
+    val asset = get_asset_by_symbol("CHR");
+    print("this is asset", asset);
+
+    admin_mint_for_user(
+        get_account_by_pubkey(admin_pub.hash()),
+        asset,
+        10000000000000000000L
+    );
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            transfer(
+                user_kp.pub.hash(),
+                asset.id,
+                10000000000000000000L
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    rell.test.tx()
+        .nop()
+        .op(
+            ras_transfer_fee(
+                asset.id,
+                single_sig_auth_descriptor(user_kp.pub, set(["T"])),
+                null
+            )
+        )
+        .op(register_account())
+        .sign(user_kp)
+        .run();
+}
+
+function mint_token_for_user(user: byte_array, asset: asset, amount: big_integer) {
+    rell.test.tx()
+        .op(mint(user.hash(), asset.id, amount))
+        .sign(admin_kp)
+        .run();
+}
+
+function add_operator_script(user: rell.test.keypair) {
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(add_operator(user.pub.hash().to_hex()))
+        .sign(admin_kp)
+        .run();
+
+    val auth_desc = get_account_auth_descriptors(
+        user.pub.hash()
+    );
+
+    print("auth_desc", auth_desc);
+}
+
+function admin_mint_for_user(user: account, asset: asset, amount: big_integer) {
+    rell.test.tx()
+        .nop()
+        .op(mint(user.id, asset.id, amount))
+        .sign(admin_kp)
+        .run();
+}
+
+function test_start_block() {
+    rell.test.set_block_interval(1000);
+    // 1000s = 1s
+}
+
+function init() {
+    test_start_block();
+
+    rell.test.tx()
+        .op(init_masterchef())
+        .sign(admin_kp).run();
+
+    deploy_token_script("Chromia", "CHR", 18, "https://url-to-asset-1-icon");
+
+    register_account_script(charlie_kp);
+    register_account_script(alice_kp);
+    register_account_script(bob_kp);
+
+    add_operator_script(charlie_kp);
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(charlie))
+        .op(register_asset_by_operator("DUMMY", "DUMMY", 6, "https://url-to-asset-1-icon"))
+        .sign(charlie_kp)
+        .run();
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(charlie))// Auth operation
+        .op(
+            register_asset_by_operator(
+                "Color",
+                "Color",
+                18,
+                "https://url-to-asset-1-icon"
+            )
+        )
+        .nop()
+        .sign(charlie_kp)
+        .run();
+}
+
+function setup() {
+    init();
+
+
+     //check if alice and bob have already been created
+    assert_equals(check_account_exists(alice.hash()), true);
+    assert_equals(check_account_exists(bob.hash()), true);
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(charlie))// Auth operation
+        .op(
+            register_asset_by_operator(
+                "LP-USDC",
+                "LP-USDC",
+                18,
+                "https://url-to-asset-1-icon"
+            )
+        )
+        .nop()
+        .sign(charlie_kp)
+        .run();
+
+    // mint_token_for_user(alice, get_asset_by_symbol("LP-USDC"), 10000000);
+    // mint_token_for_user(bob, get_asset_by_symbol("LP-USDC"), 10000000);
+
+    // val asset_id = ("LP-USDC", chain_context.blockchain_rid).hash();
+    // var balance = get_asset_balance(alice.hash(), asset_id);
+    // assert_equals(balance?.amount, 10000000);
+    // balance = get_asset_balance(bob.hash(), asset_id);
+    // assert_equals(balance?.amount, 10000000);
+}
+
+// add new lp token to the pool
+function test_add_lp_token() {
+    setup();
+
+    // Successful add LP token by operator
+    rell.test.tx()
+        .op(ft_auth_operation_for(charlie))
+        .op(add_lp_token("LP-USDC", 2000))
+        .sign(charlie_kp)
+        .run();
+}
+function test_add_lp_token_not_operator() {
+    setup();
+    // Not operator
+    val err = rell.test.tx()
+        .op(ft_auth_operation_for(bob))
+        .op(add_lp_token("BTC", 0))
+        .sign(bob_kp)
+        .run_must_fail();
+    assert_true(err.message.contains("Operator only"));
+}
+
+function test_add_lp_token_inactive_operator() {
+    setup();
+
+    // inactive operator
+    rell.test.tx()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(inactive_operator(charlie.hash().to_hex()))
+        .sign(admin_kp)
+        .run();
+
+    val err2 = rell.test.tx()
+        .op(ft_auth_operation_for(bob))
+        .op(add_lp_token("BTC", 0))
+        .sign(bob_kp)
+        .run_must_fail();
+    assert_true(err2.message.contains("Operator only"));
+}
+
+
+function test_set_pool_alloc_point  () {
+    setup();
+
+    // Add 2 LP pool
+    rell.test.tx()
+        .op(ft_auth_operation_for(charlie))
+        .op(add_lp_token("LP-USDC", 2000))
+        .sign(charlie_kp)
+        .run();
+    rell.test.tx()
+        .op(ft_auth_operation_for(charlie))
+        .op(add_lp_token("DUMMY", 2000))
+        .sign(charlie_kp)
+        .run();
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(charlie))
+        .op(set_pool_alloc_point("DUMMY", 2000))
+        .sign(charlie_kp)
+        .run();
+
+    // not operator
+    val err = rell.test.tx()
+        .op(ft_auth_operation_for(bob))
+        .op(set_pool_alloc_point("DUMMY", 2000))
+        .sign(bob_kp)
+        .run_must_fail();
+    assert_true(err.message.contains("Operator only"));
+
+    // inactive operator
+    rell.test.tx()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(inactive_operator(charlie.hash().to_hex()))
+        .sign(admin_kp)
+        .run();
+    
+    val err2 = rell.test.tx()
+        .op(ft_auth_operation_for(bob))
+        .op(set_pool_alloc_point("DUMMY", 2000))
+        .sign(bob_kp)
+        .run_must_fail();
+    assert_true(err2.message.contains("Operator only"));
+}

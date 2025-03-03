@@ -1,0 +1,122 @@
+@log
+entity stake_history_entry {
+    op_index: integer = op_context.op_index; // helps to locate exact position of transfer entry in transaction
+    index transaction, op_index;
+    index user: account;
+    index pool_info: pool_info;
+    amount: big_integer;
+    is_deposit: boolean;
+}
+
+function extract_data_from_stake_history_list(
+    entries: list<stake_history_entry>
+): list<(data:gtv,rowid:rowid)> {
+    return entries @* { } (
+        data = extract_data_from_stake_history_entry ($).to_gtv_pretty(),
+        rowid = .rowid
+    );
+}
+
+function extract_operation_name(entry: stake_history_entry): text {
+    val gtx = gtx_transaction.from_gtv(gtv.from_bytes(entry.transaction.tx_data));
+    return gtx.body.operations[entry.op_index].name;
+}
+
+function extract_data_from_stake_history_entry(entry: stake_history_entry) {
+    return (
+        id = entry.rowid,
+        amount = entry.amount,
+       // decimals = entry.asset.decimals,
+        user = entry.user,
+        lp_token = map_pool_info(entry.pool_info),
+        is_deposit = entry.is_deposit,
+        timestamp = entry.transaction.block.timestamp,
+        block_height = entry.transaction.block.block_height,
+        tx_rid = entry.transaction.tx_rid,
+        tx_data = entry.transaction.tx_data,
+        operation_name = extract_operation_name(entry),
+        op_index = entry.op_index,
+    );
+}
+
+function get_paginated_stake_history(
+    user: account ?,
+    pool_info: pool_info?,
+    is_deposit: boolean ?,
+    height: integer?,
+    page_size: integer?,
+    page_cursor: text?
+) {
+    var before_rowid: rowid? = null;
+    if (page_cursor??) {
+        val cursor = utils.decode_cursor(page_cursor);
+        before_rowid = cursor.before_rowid;
+    }
+
+    val entries = stake_history_entry @* {
+        if (user == null) true else .user == user,
+        if (pool_info == null) true else .pool_info == pool_info,
+        if (is_deposit == null) true else .is_deposit == is_deposit,
+        if (height == null) true else (.transaction.block.block_height > height),
+        if (before_rowid??) (.rowid < before_rowid) else true
+    } ( @sort_desc $ ) limit utils.fetch_data_size(page_size);
+
+    return extract_data_from_stake_history_list(entries) @* { } (
+            utils.pagination_result(
+            data = .data,
+            rowid = .rowid
+        )
+        );
+}
+
+@log
+entity harvest_history_entry {
+    op_index: integer = op_context.op_index; // helps to locate exact position of transfer entry in transaction
+    index transaction, op_index;
+    index user: account;
+    pool_info: pool_info;
+    amount: big_integer;
+}
+
+function extract_data_from_harvest_history_list(
+    entries: list<harvest_history_entry>
+): list<(data:gtv,rowid:rowid)> {
+    return entries @* { } (
+        data = extract_data_from_harvest_history_entry ($).to_gtv_pretty(),
+        rowid = .rowid
+    );
+}
+
+function extract_data_from_harvest_history_entry(entry: harvest_history_entry) {
+    return (
+        id = entry.rowid,
+        amount = entry.amount,
+        user = entry.user,
+        timestamp = entry.transaction.block.timestamp,
+        block_height = entry.transaction.block.block_height,
+        tx_rid = entry.transaction.tx_rid,
+        tx_data = entry.transaction.tx_data,
+        op_index = entry.op_index,
+    );
+}
+
+function get_paginated_harvest_history(user: account ?, height: integer?, page_size: integer?, page_cursor: text?) {
+    var before_rowid: rowid? = null;
+    if (page_cursor??) {
+        val cursor = utils.decode_cursor(page_cursor);
+        before_rowid = cursor.before_rowid;
+    }
+
+    val entries = harvest_history_entry @* {
+        if (user == null) true else .user == user,
+        if (height == null) true else (.transaction.block.block_height > height),
+        if (before_rowid??) (.rowid < before_rowid) else true
+    } ( @sort_desc $ ) limit utils.fetch_data_size(page_size);
+
+    return extract_data_from_harvest_history_list(entries) @* { } (
+            utils.pagination_result(
+            data = .data,
+            rowid = .rowid
+        )
+        );
+}

@@ -1,0 +1,60 @@
+import lib.ft4.accounts.{ account };
+import lib.ft4.assets.{ asset, get_asset_balance, balance };
+import contracts.common.*;
+
+import ^.{ get_module_args };
+
+entity mapping_token_and_x_token {
+    key token: asset;
+    index x_token: asset;
+}
+
+enum staking_history_type {
+    stake,
+    unstake
+}
+
+@log
+entity staking_history {
+    index transaction;
+    index user: account;
+    index pair_stake: mapping_token_and_x_token;
+    amount_token: big_integer;
+    amount_x_token: big_integer;
+    staking_type: staking_history_type;
+}
+
+struct staking_pair_dto {
+    token_symbol: text;
+    token_decimals: integer;
+    token_icon_url: text;
+    x_token_symbol: text;
+    x_token_icon_url: text;
+    balance_token: big_integer;
+    balance_x_token: big_integer;
+    balance_token_in_treasury: big_integer;
+    balance_x_token_in_treasury: big_integer;
+    total_supply_x_token: big_integer;
+}
+
+struct list_pool_staking_rs {
+    data: list<staking_pair_dto>;
+    metadata: metadata;
+}
+
+struct transaction_history_dto {
+    tx_hash: text;
+    timestamp: timestamp;
+    amount_token: big_integer;
+    symbol_token: text;
+    decimals_token: integer;
+    amount_x_token: big_integer;
+    symbol_x_token: text;
+    decimals_x_token: integer;
+    staking_type: staking_history_type;
+}
+
+struct list_transaction_history_staking_rs {
+    data: list<transaction_history_dto>;
+    metadata: metadata;
+}

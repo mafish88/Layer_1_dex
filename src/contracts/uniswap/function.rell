@@ -1,0 +1,562 @@
+
+function get_all_pair_asset_0(asset: asset): list<pair_manager> {
+    return pair_manager @* { .asset0 == asset };
+}
+
+function get_all_pair_asset_1(asset: asset): list<pair_manager> {
+    return pair_manager @* { .asset1 == asset };
+}
+
+function get_asset_0(asset0: asset, asset1: asset): asset {
+    if (asset0.id < asset1.id) return asset0;
+    return asset1;
+}
+
+function get_asset_1(asset0: asset, asset1: asset): asset {
+    if (asset0.id < asset1.id) return asset1;
+    return asset0;
+}
+
+function create_pair_internal(asset0: asset, asset1: asset) {
+    require(asset0.name != asset1.name, "Invalid token pair");
+
+    // check pair
+    val is_exist = check_exist_pair(asset0, asset1);
+    require(is_exist == false, "Pair already created");
+
+     // add pair 
+    val smaller_asset = get_asset_0(asset0, asset1);
+    val bigger_asset = get_asset_1(asset0, asset1);
+
+    val pair_id = (smaller_asset.id, bigger_asset.id).hash();
+
+    // create asset
+    val asset_lp_name = "ColorPool LP Token: " + smaller_asset.symbol + " " + bigger_asset.symbol;
+    val asset_lp_symbol = "CLP:" + smaller_asset.symbol + "+" + bigger_asset.symbol;
+
+    val asset_url = get_module_args().uniswap_lp_icon_domain + asset_lp_symbol + ".png";
+
+    val lp_asset = assets.Unsafe.register_asset(asset_lp_name, asset_lp_symbol, 18, chain_context.blockchain_rid, asset_url);
+
+    // create treasury
+    val acc_treasury = create_account_with_auth(
+        single_sig_auth_descriptor(
+            app_meta_uniswap.signer_treasury,
+            set(["A", "T"])
+        ),
+        (pair_id + (op_context.last_block_time/ 1000).to_text()).hash()
+    );
+ 
+    val treasury = ensure_lock_account(
+        "UNISWAP_PAIR_ACCOUNT",
+        acc_treasury
+    );
+
+    create pair_manager (
+        pair_id,
+        .asset0 = smaller_asset,
+        .asset1 = bigger_asset,
+        .lp_asset = lp_asset,
+        .treasury = treasury
+    );
+}
+
+//SECTION - UQ112x112
+function pow(base: big_integer, exp: big_integer): big_integer {
+    var result: big_integer = 1;
+    var i: big_integer = 0;
+
+    while (i < exp) {
+        result *= base;
+        i += 1;
+    }
+
+    return result;
+}
+
+//encode a uint112 as a UQ112x112
+function encode(y: big_integer): big_integer {
+    return y * app_meta_uniswap.Q112;
+    // never overflows
+}
+
+// divide a UQ112x112 by a uint112, returning a UQ112x112
+function uqdiv(x: big_integer, y: big_integer): big_integer {
+    return x / y;
+}
+
+//SECTION - Math
+function min_func(x: big_integer, y: big_integer): big_integer {
+    if (x < y) return x;
+    return y;
+}
+
+function sqrt_func(y: big_integer): big_integer {
+    var z: big_integer = 0;
+    if (y > 3) {
+        z = y;
+        var x = y / 2 + 1;
+        while (x < z) {
+            z = x;
+            x = (y / x + x) / 2;
+        }
+    } else if (y != 0) {
+        z = 1;
+    }
+
+    return z;
+}
+
+//SECTION - UniswapV2 Pair
+
+// update reserves and, on the first call per block, price accumulators
+function update_func(
+    current_pair: pair_manager,
+    balance0: big_integer,
+    balance1: big_integer,
+    reserve0: big_integer,
+    reserve1: big_integer
+) {
+    require(balance0 <= pow(2, 112) and balance1 <= pow(2, 112), "UniswapV2: OVERFLOW");
+    val block_timestamp: big_integer = (op_context.last_block_time / 1000) % (pow(2,32));
+
+    val time_elapsed: big_integer = block_timestamp - current_pair.block_timestamp_last; // overflow is desired
+
+    if (time_elapsed > 0 and reserve0 != 0 and reserve1 != 0) {
+
+        update current_pair (
+            .price0_cumulativeLast = current_pair.price0_cumulativeLast + uqdiv(encode(reserve1), reserve0) * time_elapsed,
+            .price1_cumulativeLast = current_pair.price1_cumulativeLast + uqdiv(encode(reserve0), reserve1) * time_elapsed
+        );
+    }
+
+    update current_pair (
+        .reserve0 = balance0,
+        .reserve1 = balance1,
+        .block_timestamp_last = block_timestamp
+    );
+}
+
+// if fee is on, mint liquidity equivalent to 1/6th of the growth in sqrt(k)
+function _mint_fee(current_pair: pair_manager, reserve0: big_integer, reserve1: big_integer): big_integer {
+    val fee_to = app_meta_uniswap.fee_to;
+    val fee_on = app_meta_uniswap.fee_on;
+
+    val k_last = current_pair.k_last;
+
+    if (fee_on == true) {
+        if (k_last != 0) {
+            val root_k = sqrt_func(reserve0 * reserve1);
+            val root_k_last = sqrt_func(k_last);
+
+            if (root_k > root_k_last) {
+                val numerator = current_pair.lp_asset.total_supply * (root_k - root_k_last);
+                val denominator = root_k * 5 + root_k_last;
+                val liquidity = numerator / denominator;
+                if (liquidity > 0) {
+                    assets.Unsafe.mint(get_account_by_pubkey(fee_to), current_pair.lp_asset, liquidity);
+                    return liquidity;
+                }
+            }
+        }
+    } else if (k_last != 0) {
+        update current_pair ( .k_last = 0 );
+    }
+    return 0L;
+}
+
+function _view_mint_fee(
+    current_pair: pair_manager,
+    reserve0: big_integer,
+    reserve1: big_integer
+): big_integer {
+    val fee_on = app_meta_uniswap.fee_on;
+
+    val k_last = current_pair.k_last;
+
+    if (fee_on == true) {
+        if (k_last != 0) {
+            val root_k = sqrt_func(reserve0 * reserve1);
+            val root_k_last = sqrt_func(k_last);
+
+            if (root_k > root_k_last) {
+                val numerator = current_pair.lp_asset.total_supply * (root_k - root_k_last);
+                val denominator = root_k * 5 + root_k_last;
+                val liquidity = numerator / denominator;
+                return liquidity;
+            }
+        }
+    }
+    return 0L;
+}
+
+function _view_mint(
+    current_pair: pair_manager,
+    amount0: big_integer,
+    amount1: big_integer
+): big_integer {
+    var liquidity: big_integer = 0;
+
+    // return liquidity;
+    val (reserve0, reserve1, _) = get_reserves(current_pair);
+
+    val mint_fee_lp: big_integer = _view_mint_fee(current_pair, reserve0, reserve1);
+    val total_supply = current_pair.lp_asset.total_supply + mint_fee_lp;
+
+    if (total_supply == 0) {
+        liquidity = sqrt_func(amount0 * amount1) - app_meta_uniswap.MINIMUM_LIQUIDITY;
+        // permanently lock the first MINIMUM_LIQUIDITY tokens
+    } else {
+        liquidity = min_func(amount0 * total_supply / reserve0, amount1 * total_supply / reserve1);
+    }
+
+    return liquidity;
+}
+
+function mint(current_pair: pair_manager, to: account): big_integer {
+    var liquidity: big_integer = 0;
+    val (reserve0, reserve1, _) = get_reserves(current_pair);
+    val balance0 = get_asset_balance(current_pair.treasury, current_pair.asset0);
+    val balance1 = get_asset_balance(current_pair.treasury, current_pair.asset1);
+
+    val amount0 = balance0 - reserve0;
+    val amount1 = balance1 - reserve1;
+
+    _mint_fee(current_pair, reserve0, reserve1);
+
+    val total_supply = current_pair.lp_asset.total_supply;
+
+    if (total_supply == 0) {
+        liquidity = sqrt_func(amount0 * amount1) - app_meta_uniswap.MINIMUM_LIQUIDITY;
+
+        // permanently lock the first MINIMUM_LIQUIDITY tokens
+        assets.Unsafe.mint(current_pair.treasury, current_pair.lp_asset, app_meta_uniswap.MINIMUM_LIQUIDITY);
+        assets.Unsafe.burn(current_pair.treasury, current_pair.lp_asset, app_meta_uniswap.MINIMUM_LIQUIDITY);
+    } else {
+        liquidity = min_func(amount0 * total_supply / reserve0, amount1 * total_supply / reserve1);
+    }
+
+    require(liquidity > 0, "UniswapV2: INSUFFICIENT_LIQUIDITY_MINTED");
+    assets.Unsafe.mint(to, current_pair.lp_asset, liquidity);
+
+    update_func(current_pair, balance0, balance1, reserve0, reserve1);
+
+    if (app_meta_uniswap.fee_on) {
+        val k_last = current_pair.reserve0 * current_pair.reserve1; // reserve0 and reserve1 are up-to-date
+        update current_pair ( .k_last = k_last );
+    }
+
+    return liquidity;
+}
+
+function burn(current_pair: pair_manager, to: account): (big_integer, big_integer) {
+    var amount0: big_integer = 0;
+    var amount1: big_integer = 0;
+
+    val (reserve0, reserve1, _) = get_reserves(current_pair);
+    var balance0 = get_asset_balance(current_pair.treasury, current_pair.asset0);
+    var balance1 = get_asset_balance(current_pair.treasury, current_pair.asset1);
+    val liquidity = get_asset_balance(current_pair.treasury, current_pair.lp_asset);
+
+    _mint_fee(current_pair, reserve0, reserve1);
+
+    val total_supply = current_pair.lp_asset.total_supply;
+
+    amount0 = liquidity * balance0 / total_supply; // using balances ensures pro-rata distribution
+    amount1 = liquidity * balance1 / total_supply; // using balances ensures pro-rata distribution
+
+    require(amount0 > 0 and amount1 > 0, "UniswapV2: INSUFFICIENT_LIQUIDITY_BURNED");
+
+    assets.Unsafe.burn(current_pair.treasury, current_pair.lp_asset, liquidity);
+
+    assets.Unsafe.transfer(current_pair.treasury, to, current_pair.asset0, amount0);
+    assets.Unsafe.transfer(current_pair.treasury, to, current_pair.asset1, amount1);
+
+    balance0 = get_asset_balance(current_pair.treasury, current_pair.asset0);
+    balance1 = get_asset_balance(current_pair.treasury, current_pair.asset1);
+
+    update_func(current_pair, balance0, balance1, reserve0, reserve1);
+
+    if (app_meta_uniswap.fee_on) {
+        val k_last = current_pair.reserve0 * current_pair.reserve1; // reserve0 and reserve1 are up-to-date
+        update current_pair ( .k_last = k_last );
+    }
+
+    return (amount0, amount1);
+}
+
+function swap(
+    current_pair: pair_manager,
+    amount0_out: big_integer,
+    fee_0_out: big_integer,
+    amount1_out: big_integer,
+    fee_1_out: big_integer,
+    to: account
+) {
+
+    require(amount0_out > 0 or amount1_out > 0, "UniswapV2: INSUFFICIENT_OUTPUT_AMOUNT");
+    val (reserve0, reserve1, _) = get_reserves(current_pair);
+
+    require(amount0_out < reserve0 and amount1_out < reserve1, "UniswapV2: INSUFFICIENT_LIQUIDITY");
+
+    var balance0: big_integer = 0;
+    var balance1: big_integer = 0;
+    {
+        val token0 = current_pair.asset0;
+        val token1 = current_pair.asset1;
+        if (amount0_out > 0) {
+            // Transfer 99.9% of amount to destination (new pool or user)
+            assets.Unsafe.transfer(current_pair.treasury, to, token0, amount0_out - fee_0_out);
+            // Transfer 0.1% of amount to treasury
+            if (fee_0_out > 0) {
+                assets.Unsafe.transfer(
+                        current_pair.treasury,
+                        get_account_by_pubkey(get_lock_acc_from_uniswap_acc_treasury()),
+                        token0,
+                        fee_0_out
+                    );
+            }
+        }
+        if (amount1_out > 0) {
+            // Transfer 99.9% of amount to destination (new pool or user)
+            assets.Unsafe.transfer(current_pair.treasury, to, token1, amount1_out - fee_1_out);
+            // Transfer 0.1% of amount to treasury
+            if (fee_1_out > 0) {
+                assets.Unsafe.transfer(
+                        current_pair.treasury,
+                        get_account_by_pubkey(get_lock_acc_from_uniswap_acc_treasury()),
+                        token1,
+                        fee_1_out
+                    );
+            }
+        }
+
+        balance0 = get_asset_balance(current_pair.treasury, token0); // -> balanceIn = reserveIn + 99.9% amountIn
+        balance1 = get_asset_balance(current_pair.treasury, token1);
+        // -> balanceOut = reserveOut - amountOut
+    }
+
+    var amount0_in: big_integer = 0;
+
+    // amount_in here is 99.9% of amount_in
+    if (balance0 > reserve0 - amount0_out) {
+        amount0_in = balance0 - (reserve0 - amount0_out);
+    }
+    var amount1_in: big_integer = 0;
+    if (balance1 > reserve1 - amount1_out) {
+        amount1_in = balance1 - (reserve1 - amount1_out);
+    }
+
+    require(amount0_in > 0 or amount1_in > 0, "UniswapV2: INSUFFICIENT_INPUT_AMOUNT");
+
+    {
+        // balance_adjusted = reserveIn + 99.9% amountIn - 0.2% amountIn
+        val balance0_adjusted = balance0 * 1000 - amount0_in * 1000 / 999 * 2;
+        val balance1_adjusted = balance1 * 1000 - amount1_in * 1000 / 999 * 2;
+
+        require(balance0_adjusted * balance1_adjusted >= reserve0 * reserve1 * pow(1000, 2), "UniswapV2: K");
+    }
+
+    update_func(current_pair, balance0, balance1, reserve0, reserve1);
+}
+
+//**SECTION - V2 Library */
+function quote(amount_a: big_integer, reserve_a: big_integer, reserve_b: big_integer): big_integer {
+    require(amount_a > 0, "UniswapV2Library: INSUFFICIENT_AMOUNT");
+    require(reserve_a > 0 and reserve_b > 0, "UniswapV2Library: INSUFFICIENT_LIQUIDITY");
+    return amount_a * reserve_b / reserve_a;
+}
+
+function get_amount_out(
+    amount_in: big_integer,
+    reserve_in: big_integer,
+    reserve_out: big_integer
+): get_amount_response {
+    require(amount_in > 0, "UniswapV2Library: INSUFFICIENT_AMOUNT");
+    require(reserve_in > 0 and reserve_out > 0, "UniswapV2Library: INSUFFICIENT_LIQUIDITY");
+    val amount_in_with_fee = amount_in * 997;
+    val numerator = amount_in_with_fee * reserve_out;
+    val denominator = (reserve_in * 1000) + amount_in_with_fee;
+
+    val amount_in_treasury_fee = amount_in * 1 / 1000;
+    val amount_in_lp_fee = amount_in - amount_in_treasury_fee - amount_in_with_fee / 1000;
+    require(numerator > 0 and denominator > 0, "UniswapV2Library: INVALID INPUT AMOUNT");
+
+    return get_amount_response(
+        amount_in_lp_fee = amount_in_lp_fee,
+        amount_in_treasury_fee = amount_in_treasury_fee,
+        amount_in_total = amount_in,
+        amount_out = numerator / denominator
+    );
+}
+
+function get_amount_in(
+    amount_out: big_integer,
+    reserve_in: big_integer,
+    reserve_out: big_integer
+): get_amount_response {
+    require(amount_out > 0, "UniswapV2Library: INSUFFICIENT_AMOUNT");
+    require(reserve_in > 0 and reserve_out > 0, "UniswapV2Library: INSUFFICIENT_LIQUIDITY");
+    val numerator = reserve_in * amount_out * 1000;
+    val denominator = (reserve_out - amount_out) * 997;
+    val amount_in_total = (numerator / denominator) + 1;
+    val amount_in_treasury_fee = amount_in_total * 1 / 1000;
+    val amount_in = amount_in_total * 997 / 1000;
+    val amount_in_lp_fee = amount_in_total - amount_in_treasury_fee - amount_in;
+    require(numerator > 0 and denominator > 0, "UniswapV2Library: INVALID INPUT AMOUNT");
+    return get_amount_response(
+        amount_in_lp_fee = amount_in_lp_fee,
+        amount_in_treasury_fee = amount_in_treasury_fee,
+        amount_in_total = amount_in_total,
+        amount_out = amount_out
+    );
+}
+
+function get_amounts_out(amount_in: big_integer, path: list<asset>): list<get_amount_response> {
+    require(path.size() >= 2, "UniswapV2Library: INVALID_PATH");
+    val amounts_response: list<get_amount_response> = [];
+
+    var old_amount = amount_in;
+
+    for (i in range(path.size()-1)) {
+        val (
+            input_reserve,
+            output_reserve
+        ) = get_reserves_for_token(
+            get_force_pair(
+                path[i],
+                path[i + 1]
+            ),
+            path[i],
+            path[i + 1]
+        );
+        val get_amount_response = get_amount_out(old_amount, input_reserve, output_reserve);
+        amounts_response.add(get_amount_response);
+        old_amount = get_amount_response.amount_out;
+    }
+
+    val last_data_out = amounts_response[amounts_response.size() - 1].amount_out;
+    amounts_response.add(
+        get_amount_response(
+            amount_in_lp_fee = 0,
+            amount_in_treasury_fee = 0,
+            amount_in_total = last_data_out,
+            amount_out = 0
+        )
+    );
+    return amounts_response;
+}
+
+function get_amounts_in(amount_out: big_integer, path: list<asset>): list<get_amount_response> {
+    require(path.size() >= 2, "UniswapV2Library: INVALID_PATH");
+    val amounts_response: list<get_amount_response> = [];
+    var old_amount = amount_out;
+    amounts_response.add(
+        get_amount_response(
+            amount_in_lp_fee = 0,
+            amount_in_treasury_fee = 0,
+            amount_in_total = amount_out,
+            amount_out = 0
+        )
+    );
+    val size = path.size();
+    var i = size - 1;
+    while (i > 0) {
+        val (input_reserve, output_reserve) = get_reserves_for_token(
+            get_force_pair(path[i - 1], path[i]),
+            path[i - 1],
+            path[i]
+        );
+        val get_amount_response = get_amount_in(old_amount, input_reserve, output_reserve);
+        old_amount = get_amount_response.amount_in_total;
+        amounts_response.add(get_amount_response);
+        i--;
+    }
+    amounts_response.reverse();
+    return amounts_response;
+}
+
+//**SECTION - V2 Router */
+function _add_liquidity(
+    asset_a: asset,
+    asset_b: asset,
+    amount_a_desired: big_integer,
+    amount_b_desired: big_integer,
+    amount_a_min: big_integer,
+    amount_b_min: big_integer
+): (big_integer, big_integer) {
+    var amount_a: big_integer = 0;
+    var amount_b: big_integer = 0;
+
+    if (check_exist_pair(asset_a, asset_b) == false) {
+        create_pair_internal(asset_a, asset_b);
+    }
+
+    val current_pair = get_force_pair(asset_a, asset_b);
+
+    val (reserve_a, reserve_b) = get_reserves_for_token(current_pair, asset_a, asset_b);
+    if (reserve_a == 0 and reserve_b == 0) {
+        amount_a = amount_a_desired;
+        amount_b = amount_b_desired;
+    } else {
+        val amount_b_optimal = quote(amount_a_desired, reserve_a, reserve_b);
+        if (amount_b_optimal <= amount_b_desired) {
+            require(amount_b_optimal >= amount_b_min, "UniswapV2Router: INSUFFICIENT_B_AMOUNT");
+            amount_a = amount_a_desired;
+            amount_b = amount_b_optimal;
+        } else {
+            val amount_a_optimal = quote(amount_b_desired, reserve_b, reserve_a);
+            require(amount_a_optimal <= amount_a_desired, "UniswapV2Router: Invalid input");
+            require(amount_a_optimal >= amount_a_min, "UniswapV2Router: INSUFFICIENT_A_AMOUNT");
+            amount_a = amount_a_optimal;
+            amount_b = amount_b_desired;
+        }
+    }
+
+    return (amount_a, amount_b);
+}
+
+function _swap(amounts_response: list<get_amount_response>, path: list<asset>, to_user_account: account) {
+    var to = to_user_account;
+    for (i in range(path.size()-1)) {
+        val input = path[i];
+        val output = path[i + 1];
+        val (token0, _) = sort_asset(input, output);
+
+        val amount_out = amounts_response[i + 1].amount_in_total;
+        val fee_out = amounts_response[i + 1].amount_in_treasury_fee;
+
+        var amount0_out: big_integer = 0;
+        var amount1_out: big_integer = 0;
+        var fee_0_out: big_integer = 0;
+        var fee_1_out: big_integer = 0;
+        if (input == token0) {
+            amount1_out = amount_out;
+            fee_1_out = fee_out;
+        } else {
+            amount0_out = amount_out;
+            fee_0_out = fee_out;
+        }
+
+        if (i < path.size() - 2) {
+            to = get_force_pair(output, path[i + 2]).treasury;
+        } else {
+            to = to_user_account;
+        }
+        swap(get_force_pair(input, output), amount0_out, fee_0_out, amount1_out, fee_1_out, to);
+
+        create uniswap_history_transaction (
+            .user = to,
+            .token0 = input,
+            .token1 = output,
+            .amount0 = amounts_response[i].amount_in_total,
+            .amount1 = amounts_response[i+1].amount_in_total,
+            .amount_lp = 0,
+            .type = uniswap_history_type.swap,
+            .transaction_index = i,
+            .total_fee = amounts_response[i].amount_in_treasury_fee + amounts_response[i].amount_in_lp_fee,
+            .fee_for_liquidity_provider = amounts_response[i].amount_in_lp_fee,
+            .fee_for_treasury = amounts_response[i].amount_in_treasury_fee
+        );
+    }
+}

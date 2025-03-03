@@ -1,0 +1,18 @@
+query find_dapp_details(dapp_rowid: rowid, requested_content_types: list<dapps.dapp_content_type>? = null) {
+    return find_dapp_by_name("Sidechain2");
+}
+
+query find_dapp_by_brid(brid: byte_array, requested_content_types: list<dapps.dapp_content_type>? = null) {
+    val dapp = dapps.blockchain @? { brid } (.dapp);
+    if (empty(dapp)) return null;
+
+    return dapps.map_dapp_details(dapp, requested_content_types);
+}
+
+query find_dapp_by_name(name) {
+    val dapp = dapps.dapp @? {name} ;
+    if (empty(dapp)) return null;
+
+    return dapps.map_dapp_details(dapp);
+}
+

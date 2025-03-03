@@ -1,0 +1,148 @@
+import lib.ft4.accounts.{ account };
+import lib.ft4.assets.{ asset, get_asset_balance };
+
+import ^.{ get_module_args };
+import contracts.common.*;
+
+// get list liquidity
+struct liquidity_dto {
+    id: byte_array;
+    asset0: asset_dto;
+    asset1: asset_dto;
+    detail: liquidity_detail_dto;
+    lp_asset_name: name;
+    lp_asset_symbol: text;
+}
+
+struct liquidity_detail_dto {
+    total_pool_token: big_integer;
+    pooled0: big_integer;
+    pooled1: big_integer;
+    total_supply: big_integer;
+}
+
+struct asset_dto {
+    name;
+    symbol: text;
+    icon_url: text;
+}
+
+object app_meta_uniswap {
+    mutable fee_to: pubkey = admin.get_admin_pubkey();
+    mutable fee_on: boolean = false;
+    mutable fee_to_setter: pubkey = admin.get_admin_pubkey();
+    mutable signer_treasury: pubkey = admin.get_admin_pubkey();
+
+    // UQ112x112
+    Q112: big_integer = pow(2, 112);
+    MINIMUM_LIQUIDITY: big_integer = pow(10, 3);
+}
+
+entity pair_manager {
+    key id: byte_array;
+    asset0: asset;
+    asset1: asset;
+    key asset0, asset1;
+    mutable reserve0: big_integer = 0;
+    mutable reserve1: big_integer = 0;
+    mutable block_timestamp_last: big_integer = 0;
+    mutable price0_cumulativeLast: big_integer = 0;
+    mutable price1_cumulativeLast: big_integer = 0;
+    mutable k_last: big_integer = 0;
+    treasury: account;
+    lp_asset: asset;
+    index asset0;
+    index asset1;
+    index lp_asset;
+    // unlocked: integer = 1;
+}
+
+struct pair_manager_dto {
+    id: byte_array;
+    asset0_symbol: text;
+    asset1_symbol: text;
+    reserve0: big_integer;
+    reserve1: big_integer;
+    treasury: byte_array;
+    lp_asset_symbol: text;
+}
+
+enum uniswap_history_type {
+    swap,
+    add_liquidity,
+    remove_liquidity
+}
+
+@log
+entity uniswap_history_transaction {
+    index transaction;
+    index transaction_index: integer = 0;
+    key transaction, transaction_index;
+    index user: account;
+    token0: asset;
+    token1: asset;
+    amount0: big_integer;
+    amount1: big_integer;
+    amount_lp: big_integer;
+    type: uniswap_history_type;
+    total_fee: big_integer = 0;
+    fee_for_liquidity_provider: big_integer = 0;
+    fee_for_treasury: big_integer = 0;
+}
+
+struct token_dto {
+    name: text;
+    symbol: text;
+    icon_url: text;
+    decimals: integer;
+    total_supply: text;
+    id: byte_array;
+}
+
+struct list_tokens_rs {
+    data: list<token_dto>;
+    metadata: metadata;
+}
+
+struct list_liquidity_rs {
+    data: list<liquidity_dto>;
+    metadata: metadata;
+}
+
+struct add_liquidity_dto {
+    amount_a: big_integer;
+    amount_b: big_integer;
+    current_user_lp: big_integer;
+    current_total_supply: big_integer;
+    after_user_lp: big_integer;
+    after_total_supply: big_integer;
+}
+
+struct remove_liquidity_dto {
+    current_user_lp: big_integer;
+    current_total_supply: big_integer;
+    after_user_lp: big_integer;
+    after_total_supply: big_integer;
+    amount_a: big_integer;
+    amount_b: big_integer;
+    liquidity: big_integer;
+}
+
+struct get_amount_response {
+    amount_in_lp_fee: big_integer;
+    amount_in_treasury_fee: big_integer;
+    amount_in_total: big_integer;
+    amount_out: big_integer;
+}
+
+struct uniswap_fee_and_reward_dto {
+    pair_manager_id: byte_array;
+    token0_symbol: text;
+    token1_symbol: text;
+    fee_0: big_integer;
+    fee_1: big_integer;
+    reward_0: big_integer;
+    reward_1: big_integer;
+    reserve0: big_integer;
+    reserve1: big_integer;
+}

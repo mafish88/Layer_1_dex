@@ -1,0 +1,534 @@
+@test module;
+
+
+import lib.ft4.test.utils. { ft_auth_operation_for };
+import lib.ft4.external.assets.{ get_asset_balance} ;
+import lib.ft4.external.accounts. { get_accounts_by_signer, get_account_by_id};
+import contracts.common.*;
+import contracts.masterchef.*;
+import lib.ft4.external.admin. { mint, register_asset };
+
+import lib.ft4.external.accounts.strategies. { register_account };
+import lib.ft4.core.accounts.strategies.transfer.fee. { ras_transfer_fee };
+import lib.ft4.external.assets.{ transfer };
+
+
+val alice = rell.test.pubkeys.alice;
+val bob = rell.test.pubkeys.bob;
+val charlie = rell.test.pubkeys.charlie;
+val alice_kp = rell.test.keypairs.alice; 
+val bob_kp = rell.test.keypairs.bob;
+val charlie_kp = rell.test.keypairs.charlie;
+val admin_pub =  x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06";
+ val admin_kp = rell.test.keypair(
+    priv = x"DACA68A6085937879759F316D51310DFB5FB23006B1B5DFA63AE01308D17F67D",
+    pub = x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06"
+ );
+
+function deploy_token_script(asset_name: name, symbol: text, decimals: integer, icon_url: text) {
+    rell.test.tx()
+        .nop()
+        .op(register_asset(asset_name, symbol, decimals, icon_url))
+        .sign(admin_kp)
+        .run();
+}
+
+
+function register_account_script(user_kp: rell.test.keypair){
+    val asset = get_asset_by_symbol("CHR");
+    print("this is asset",asset);
+
+    admin_mint_for_user(
+        get_account_by_pubkey(admin_pub.hash()),
+        asset,
+        10000000000000000000L
+    );
+
+    rell.test.tx()
+    .nop()
+    .op(ft_auth_operation_for(admin_pub))
+    .op(transfer(
+        user_kp.pub.hash(),
+        asset.id,
+        10000000000000000000L
+    ))
+    .sign(admin_kp)
+    .run();
+
+    rell.test.tx()
+       .nop()
+       .op(ras_transfer_fee(
+            asset.id,
+            single_sig_auth_descriptor(user_kp.pub, set(["T"])), 
+            null
+        ))
+       .op(register_account())
+       .sign(user_kp)
+       .run();
+}
+
+function mint_token_for_user(user: byte_array, asset: asset, amount: big_integer){
+    rell.test.tx()
+        .op(mint(user.hash(), asset.id, amount))
+        .sign(admin_kp)
+    .run ();
+}
+
+function add_operator_script (user: rell.test.keypair) {
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(add_operator(user.pub.hash().to_hex()))
+        .sign(admin_kp)
+        .run();
+
+    val auth_desc = get_account_auth_descriptors(
+        user.pub.hash()
+    );
+
+    print("auth_desc", auth_desc);
+}
+
+function admin_mint_for_user(user: account, asset: asset, amount: big_integer) {
+    rell.test.tx()
+    .nop()
+    .op(mint(user.id, asset.id, amount))
+    .sign(admin_kp)
+    .run();
+}
+
+function test_start_block() {
+    rell.test.set_block_interval(1000); // 1000s = 1s 
+}
+
+function test_init() {
+    test_start_block();
+    rell.test.tx()
+    .op(init_masterchef())
+    .sign(admin_kp).run();
+
+    deploy_token_script("Chromia", "CHR", 18, "https://url-to-asset-1-icon");
+
+    register_account_script(charlie_kp);
+
+    add_operator_script(charlie_kp);
+
+    rell.test.tx()
+    .op(ft_auth_operation_for(charlie)) // Auth operation
+    .op(register_asset_by_operator(
+        "Color", 
+        "Color", 
+        18, 
+        "https://url-to-asset-1-icon"
+    ))
+    .nop()
+    .sign(charlie_kp)
+    .run();
+
+    admin_mint_for_user(get_account_by_pubkey(charlie.hash()), get_reward_token_farming(), 100000000000000000000000L);
+
+    val balance = get_asset_balance(charlie.hash(), get_reward_token_farming().id);
+    assert_equals(balance?.amount, 100000000000000000000000L);
+
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(charlie))
+        .op(
+            transfer(
+                get_lock_acc_from_masterchef_acc_treasury(),
+                get_reward_token_farming().id,
+                100000000000000000000000L
+            )
+        )
+        .sign(charlie_kp)
+        .run();
+
+}  
+
+
+//deploy lpToken
+function test_deploy_lpToken() {
+    test_init();
+    
+    
+    rell.test.tx()
+    .op(ft_auth_operation_for(charlie)) // Auth operation
+    .op(register_asset_by_operator(
+        "LP-USDC", 
+        "LP-USDC", 
+        18, 
+        "https://url-to-asset-1-icon"
+    ))
+    .nop()
+    .sign(charlie_kp)
+    .run();
+ 
+    val asset_id = ("LP-USDC", chain_context.blockchain_rid).hash(); 
+
+    admin_mint_for_user(get_account_by_pubkey(admin_pub.hash()), get_asset_by_symbol("LP-USDC"), 1000000000000);
+    val balance = get_asset_balance(admin_pub.hash(), asset_id);
+    assert_equals(balance?.amount, 1000000000000);
+}
+
+function test_create_account(){
+    test_init();
+
+    register_account_script(alice_kp);
+    register_account_script(bob_kp);
+
+     //check if alice and bob have already been created
+    assert_equals( check_account_exists(alice.hash()), true);
+    assert_equals( check_account_exists(bob.hash()),  true);
+
+    rell.test.tx()
+    .op(ft_auth_operation_for(charlie)) // Auth operation
+    .op(register_asset_by_operator(
+        "LP-USDC", 
+        "LP-USDC", 
+        18, 
+        "https://url-to-asset-1-icon"
+    ))
+    .nop()
+    .sign(charlie_kp)
+    .run();
+
+    mint_token_for_user(alice, get_asset_by_symbol("LP-USDC"), 10000000);
+    mint_token_for_user(bob, get_asset_by_symbol("LP-USDC"), 10000000);
+
+    val asset_id = ("LP-USDC", chain_context.blockchain_rid).hash(); 
+    var balance = get_asset_balance(alice.hash(), asset_id);
+    assert_equals(balance?.amount, 10000000);   
+    balance = get_asset_balance(bob.hash(), asset_id);
+    assert_equals(balance?.amount, 10000000);  
+   
+}
+
+//add new lp token to the pool 
+function test_add_token() {
+
+    test_create_account();
+   
+    val e1 = rell.test.tx()
+        .op(ft_auth_operation_for(charlie)) // Auth operation
+        .op(add_lp_token( "BTC", 0 ))
+        .sign(charlie_kp)
+        .run_must_fail(); 
+    assert_true(e1.message.contains("token invalid"));
+    val e2 = rell.test.tx()
+        .op(ft_auth_operation_for(alice)) // <-- malicious auth operation
+        .op(add_lp_token( "BTC", 0 ))
+        .sign(bob_kp)
+        .run_must_fail(); 
+    
+    val e3 =  rell.test.tx()
+        .op(ft_auth_operation_for(alice)) // Auth operation
+        .op(add_lp_token("LP-USDC", 2000 ))
+        .sign(alice_kp)
+        .run_must_fail();
+    assert_true(e3.message.contains("Operator only"));
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(charlie)) // Auth operation
+        .op(add_lp_token( "LP-USDC", 2000 ))
+        .sign(charlie_kp)
+        .run();
+
+}
+
+//deposit 
+function test_deposit() {
+    
+    test_add_token() ;
+    val admin_account = get_account_by_pubkey(admin_pub.hash());
+   
+
+    val e1 = rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(alice))
+        .op(deposit("BTC", 5000))
+        .sign(alice_kp)
+        .run_must_fail();
+    assert_true(e1.message.contains("No records found"));
+
+
+    //fail: auth operation missed
+    val e3 = rell.test.tx().
+    op(deposit("LP-USDC", 50000000)).run_must_fail();
+   
+    rell.test.tx()
+        .op(ft_auth_operation_for(alice)) 
+        .op(deposit("LP-USDC", 4000))
+        .sign(alice_kp)
+        .run ();
+  
+    val e4 =  rell.test.tx()
+        .op(ft_auth_operation_for(bob)) // Auth operation
+        .op(deposit("LP-USDC", 50000000000))
+        .sign(bob_kp)
+        .run_must_fail();
+    
+    rell.test.tx()
+        .op(ft_auth_operation_for(bob)) // Auth operation
+        .op(deposit("LP-USDC", 1000))
+        .sign(bob_kp)
+        .run();
+   
+   
+    assert_true(e4.message.contains("wallet balance not enough to deposit"));
+    assert_equals(check_pool_info_balance(alice.hash(),"LP-USDC" ), 4000);
+    assert_equals(check_pool_info_balance(bob.hash(), "LP-USDC" ), 1000);
+    val asset_id = ("LP-USDC", chain_context.blockchain_rid).hash(); 
+    var balance = get_asset_balance(alice.hash(), asset_id);
+    assert_equals(balance?.amount, 10000000-4000);  
+      
+}
+
+
+function test_reward_when_deposit() {
+    test_deposit();
+   
+    val asset_id = ("LP-USDC", chain_context.blockchain_rid).hash(); 
+
+    var balance = get_asset_balance(alice.hash(), asset_id);
+    assert_equals(balance?.amount, 10000000-4000)  ;
+    
+    rell.test.tx()
+        .op(ft_auth_operation_for(alice)) // Auth operation
+        .op(deposit("LP-USDC", 1000))
+        .sign(alice_kp)
+        .run();
+
+    balance = get_asset_balance(alice.hash(), get_reward_token_farming().id);
+    assert_equals(balance?.amount, 18000000000000000L);
+
+    rell.test.tx()
+    .op(ft_auth_operation_for(bob)) // Auth operation
+        .op(deposit("LP-USDC", 4000))
+        .sign(bob_kp)
+        .run();
+   
+    balance = get_asset_balance(bob.hash(), get_reward_token_farming().id);
+    assert_equals(balance?.amount, 3666666666666666);
+    assert_equals(check_pool_info_balance(alice.hash(), "LP-USDC"), 5000);
+    assert_equals(check_pool_info_balance(bob.hash(), "LP-USDC"), 5000);
+
+}
+
+
+function test_reward_when_withdraw  () {
+
+    test_reward_when_deposit() ; 
+   
+    //advanced time for 2 seconds
+    rell.test.set_next_block_time_delta(2000-1000);
+    rell.test.block().run();
+
+    rell.test.tx()
+    .nop()
+    .op(ft_auth_operation_for(alice)) // Auth operation
+    .op(withdraw("LP-USDC", 3000))
+    .sign(alice_kp)
+    .run();
+
+    val asset_id = ("LP-USDC", chain_context.blockchain_rid).hash(); 
+    var balance = get_asset_balance(alice.hash(), get_reward_token_farming().id);
+    // assert_equals(balance?.amount, 1800000 + 1833333 )  ;
+    assert_equals(check_pool_info_balance(alice.hash(), "LP-USDC"), 2000);
+
+    
+    val e1= rell.test.tx()
+        .op(ft_auth_operation_for(bob)) 
+    .op(withdraw("LP-USDC", 100000)) //withdraw exceeds balance -> fail
+    .sign(bob_kp)
+    .run_must_fail();
+    assert_true(e1.message.contains("withdraw amount exceed balance"));
+
+    //advance time for 1 week
+    rell.test.set_next_block_time_delta(10*1000 - 1000);
+    rell.test.block().run();
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(bob)) 
+        .op(withdraw("LP-USDC", 2000))
+        .sign(bob_kp)
+        .run();
+
+    assert_equals(check_pool_info_balance(bob.hash(), "LP-USDC"), 3000);
+    balance = get_asset_balance(bob.hash(), get_reward_token_farming().id);
+    // assert_equals(balance?.amount,(366666 + 8142857) ) ;
+}
+
+
+
+function test_harvest_reward() {
+    test_reward_when_withdraw () ; 
+    
+    //advance block time for 20s 
+    rell.test.set_next_block_time_delta(20*1000 - 1000);
+    rell.test.block().run();
+
+    rell.test.tx()
+    .nop()
+    .op(ft_auth_operation_for(alice))
+    .op(harvest("LP-USDC"))
+    .sign(alice_kp)
+    .run();
+
+ 
+    assert_equals(check_pool_info_balance(alice.hash(), "LP-USDC"), 2000);
+    var balance = get_asset_balance(alice.hash(), get_reward_token_farming().id);
+    // assert_equals(balance?.amount,(1800000+ 1833333+ 10857143)) ;
+    
+
+    //advance block time for 30s 
+    rell.test.set_next_block_time_delta(30*1000 - 1000);
+    rell.test.block().run();
+
+    rell.test.tx()
+    .nop()
+    .op(ft_auth_operation_for(bob))
+    .op(harvest("LP-USDC"))
+    .sign(bob_kp)
+    .run();
+
+    balance = get_asset_balance(bob, get_reward_token_farming().id);
+}
+
+
+function test_emergency_withdraw () {
+    test_deposit() ;  // ALice USDC amount = 4000
+    val asset_id = ("LP-USDC", chain_context.blockchain_rid).hash(); 
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(alice)) // Auth operation
+        .op(deposit("LP-USDC", 1000))
+        .sign(alice_kp)
+        .run();
+
+    var balance = get_asset_balance(alice.hash(), get_reward_token_farming().id);
+    assert_equals(balance?.amount, 18000000000000000L);
+
+    // emergency withdraw
+    rell.test.tx()
+    .op(ft_auth_operation_for(alice))
+    .op(emergency_withdraw("LP-USDC"))
+    .sign(alice_kp)
+    .run();
+
+    assert_equals(check_pool_info_balance(alice.hash(),"LP-USDC" ), 0);
+
+    print("user_info:", get_user_info(alice.hash(), "LP-USDC"));
+    //expected output: user_info: (0,0) --> pass
+}
+
+
+function test_add_multi_lp () {
+   //add lp tokens to pool
+    test_add_token ();
+    
+    rell.test.tx()
+    .op(ft_auth_operation_for(charlie))
+    .op(register_asset_by_operator("DUMMY", "DUMMY", 6, "https://url-to-asset-1-icon"))
+    .sign(charlie_kp)
+    .run();
+   
+
+    rell.test.tx()
+    .op(ft_auth_operation_for(charlie)) 
+    .op(add_lp_token("DUMMY", 1000 ))
+    .sign(charlie_kp)
+    .run();
+
+    val asset_id = ("DUMMY", chain_context.blockchain_rid).hash();
+    mint_token_for_user(alice, get_asset_by_symbol("DUMMY"), 1000000);
+    mint_token_for_user(bob, get_asset_by_symbol("DUMMY"), 1000000); 
+
+    rell.test.block().run();
+
+
+    rell.test.tx()
+    .nop()
+    .op(ft_auth_operation_for(alice)) 
+    .op(deposit("LP-USDC", 2000))
+    .sign(alice_kp)
+    .op(ft_auth_operation_for(bob)) 
+    .op(deposit("DUMMY", 4000))
+    .sign(bob_kp)
+    .run ();
+
+
+    assert_equals(check_pool_info_balance(alice.hash(), "LP-USDC"), 2000);
+    assert_equals(check_pool_info_balance(bob.hash(), "DUMMY"), 4000);
+  
+
+    // //advance time for 20s 
+    rell.test.set_next_block_time_delta(86400*7*1000-1000);
+    rell.test.block().run();
+
+    rell.test.tx()
+    .nop()
+    .op(ft_auth_operation_for(bob))
+    .op(harvest("DUMMY"))
+    .sign(bob_kp)
+    .op(ft_auth_operation_for(alice))
+    .op(harvest("LP-USDC"))
+    .sign(alice_kp)
+    .run();
+
+    var balance = get_asset_balance(bob.hash(), get_reward_token_farming().id);
+    // assert_equals(balance?.amount,( 86400*7*1000000/3*1)) ; //201600000000
+    balance = get_asset_balance(alice.hash(), get_reward_token_farming().id);
+    // assert_equals(balance?.amount,( 86400*7*1000000/3*2)) ; //403200000000
+
+}
+
+
+function test_set_pool_alloc_point  () {
+    test_add_multi_lp ();
+    
+    rell.test.tx()
+    .op(ft_auth_operation_for(charlie)) // Auth operation
+    .op(set_pool_alloc_point("DUMMY", 2000))
+    .sign(charlie_kp)
+    .run();
+    
+    rell.test.tx()
+    .op(ft_auth_operation_for(bob))
+    .op(harvest("DUMMY"))
+    .sign(bob_kp)
+    .op(ft_auth_operation_for(alice))
+    .op(harvest("LP-USDC"))
+    .sign(alice_kp)
+    .run();
+
+    var balance = get_asset_balance(bob.hash(), get_reward_token_farming().id);
+    //assert_equals(balance?.amount,( 86400*7*1000000/3*1)) ; //201600000000
+    print("alice reward: ", balance?.amount);
+    balance = get_asset_balance(alice.hash(), get_reward_token_farming().id);
+    //assert_equals(balance?.amount,( 86400*7*1000000/3*2)) ; //403200000000
+    print("bob reward: ", balance?.amount);
+
+     // //advance time for 20s 
+    rell.test.set_next_block_time_delta(2000-1000);
+    rell.test.block().run();
+
+
+    rell.test.tx()
+    .nop()
+    .op(ft_auth_operation_for(bob))
+    .op(harvest("DUMMY"))
+    .sign(bob_kp)
+    .op(ft_auth_operation_for(alice))
+    .op(harvest("LP-USDC"))
+    .sign(alice_kp)
+    .run();
+
+    balance = get_asset_balance(bob.hash(), get_reward_token_farming().id);
+    //assert_equals(balance?.amount,( 86400*7*1000000/3*1)) ; //201600000000
+    print("alice reward: ", balance?.amount);
+    balance = get_asset_balance(alice.hash(), get_reward_token_farming().id);
+    //assert_equals(balance?.amount,( 86400*7*1000000/3*2)) ; //403200000000
+    print("bob reward: ", balance?.amount);
+
+}

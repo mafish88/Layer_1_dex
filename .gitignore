@@ -1,0 +1,9 @@
+build
+src/lib/*
+.chromia
+.DS_Store
+node_modules
+.secret
+.docker
+
+.secret_2

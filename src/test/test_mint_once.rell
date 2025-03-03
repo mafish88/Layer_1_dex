@@ -1,0 +1,100 @@
+@test module;
+
+import lib.ft4.test.utils. { ft_auth_operation_for };
+import lib.ft4.external.assets.{ get_asset_balance} ;
+import lib.ft4.external.accounts. { get_accounts_by_signer, get_account_by_id};
+import lib.ft4.external.accounts.strategies. { register_account };
+import lib.ft4.core.accounts.strategies.transfer.fee. { ras_transfer_fee };
+import lib.ft4.external.assets.{ transfer };
+import contracts.common.*;
+import contracts.credits.*;
+import contracts.staking.*;
+
+import lib.ft4.external.admin. { mint, register_asset };
+
+
+val alice = rell.test.pubkeys.alice;
+val bob = rell.test.pubkeys.bob;
+val charlie = rell.test.pubkeys.charlie;
+val alice_kp = rell.test.keypairs.alice; 
+val bob_kp = rell.test.keypairs.bob;
+val charlie_kp = rell.test.keypairs.charlie;
+val admin_pub = x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06";
+val admin_kp = rell.test.keypair(
+        priv = x"DACA68A6085937879759F316D51310DFB5FB23006B1B5DFA63AE01308D17F67D",
+        pub = x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06"
+    );
+
+function admin_mint_for_user(user: account, asset: asset, amount: big_integer) {
+    rell.test.tx()
+        .nop()
+        .op(mint(user.id, asset.id, amount))
+        .sign(admin_kp)
+        .run();
+}
+
+function deploy_token_script(asset_name: name, symbol: text, decimals: integer, icon_url: text) {
+    rell.test.tx()
+        .nop()
+        .op(register_asset(asset_name, symbol, decimals, icon_url))
+        .sign(admin_kp)
+        .run();
+}
+function create_account() {
+    register_account_script(alice_kp);
+}
+
+function register_account_script(user_kp: rell.test.keypair) {
+    val asset = get_asset_by_symbol("CHR");
+    print("this is asset", asset);
+
+    admin_mint_for_user(
+        get_account_by_pubkey(admin_pub),
+        asset,
+        1000000000000000000000000L
+    );
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            transfer(
+                user_kp.pub.hash(),
+                asset.id,
+                1000000000000000000000000L
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    rell.test.tx()
+        .op(
+            ras_transfer_fee(
+                asset.id,
+                single_sig_auth_descriptor(user_kp.pub, set(["T"])),
+                null
+            )
+        )
+        .op(register_account())
+        .sign(user_kp)
+        .run();
+}
+
+function test_mint_once() {
+    rell.test.tx()
+        .op(init_staking())
+        .sign(admin_kp)
+        .run();
+
+    deploy_token_script("Chromia", "CHR", 18, "https://url-to-asset-1-icon");
+
+    val asset = get_asset_by_symbol("CHR");
+    print("this is asset", asset);
+
+    create_account();
+    // admin_mint_for_user(
+    //     get_account_by_pubkey(admin_pub),
+    //     asset,
+    //     1000L   
+    // );
+}

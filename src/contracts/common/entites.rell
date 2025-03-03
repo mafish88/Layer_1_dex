@@ -1,0 +1,53 @@
+import lib.ft4.accounts.{ account };
+import lib.ft4.assets.{ asset };
+import lib.ft4.crosschain. {asset_origin};
+
+entity operator {
+    key account;
+    mutable status: boolean = true;
+}
+
+entity is_minted_asset {
+    key asset;
+    mutable is_minted: boolean = false;
+}
+
+struct metadata {
+    total: integer;
+    page: integer;
+    page_size: integer;
+    total_page: integer;
+}
+
+struct operator_dto {
+    account_id: text;
+    role: text = "Operator";
+    status: boolean;
+}
+
+struct list_operator_dto {
+    data: list<operator_dto>;
+    metadata: metadata;
+}
+
+struct asset_register_dto {
+    asset_id: byte_array;
+    asset_name: text;
+    asset_symbol: text;
+    asset_decimals: integer;
+    asset_icon: text;
+    origin_blockchain_rid: byte_array;
+}
+
+struct list_asset_dto {
+    data: list<asset_register_dto>;
+    metadata: metadata;
+}
+
+struct asset_data_dto {
+    asset_id: byte_array;
+    asset_name: text;
+    asset_symbol: text;
+    asset_decimals: integer;
+    asset_icon: text;
+}

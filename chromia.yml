@@ -1,0 +1,170 @@
+blockchains:
+  Mockchain5:
+    config:
+      gtx:
+        modules:
+          - "net.postchain.d1.iccf.IccfGTXModule"
+    module: mockchain
+    moduleArgs:
+      lib.ft4.core.accounts:
+        auth_descriptor:
+          max_number_per_account: 4
+          max_rules: 4
+      lib.ft4.core.admin:
+        admin_pubkey: 02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06
+  dex_cp1:
+    config:
+      gtx:
+        modules:
+          - "net.postchain.d1.iccf.IccfGTXModule"
+    module: main
+    moduleArgs:
+      lib.ft4.core.accounts.strategies.transfer:
+        rules:
+          - sender_blockchain: 
+            - x"090bcd47149fbb66f02489372e88a454e7a5645adde82125d40df1ef0c76f874" # Economy chain
+            - x"7E57DB1DF38BE1A8503B9531A08B982B1D5F30F5BFE3AD9ECEBDC9C553717AAC" # Colorpool bridge chain
+            sender: "*"
+            recipient: "*"
+            asset:
+              - issuing_blockchain_rid: x"090bcd47149fbb66f02489372e88a454e7a5645adde82125d40df1ef0c76f874"
+                name: "Chromia Test"
+                min_amount: 10000000L # 10 CHR
+              - issuing_blockchain_rid: x"7E57DB1DF38BE1A8503B9531A08B982B1D5F30F5BFE3AD9ECEBDC9C553717AAC"
+                name: "BUSDC"
+                min_amount: 2000000000000000000L # 2 BUSDC
+            timeout_days: 15
+            strategy: "open" # free if transfer from economy chain or colorpool bridge chain
+          - sender_blockchain: "*"
+            sender: "*"
+            recipient: "*"
+            asset:
+              - name: "BUSDC"
+                min_amount: 2000000000000000000L
+              - name: "Chromia Test"
+                min_amount: 10000000L
+              - name: "COLOR"
+                min_amount: 1000000000000000000000L # 10_000 COLOR
+            timeout_days: 15
+            strategy: "fee"
+      lib.ft4.core.accounts.strategies.transfer.fee:
+        asset:
+          - name: "BUSDC"
+            amount: 2000000000000000000L
+          - name: "Chromia Test"
+            amount: 10000000L
+          - name: "COLOR"
+            amount: 1000000000000000000000L # 10_000 COLOR
+        fee_account: x"b3e391e3524f1ea71f8b95905d22d24c9594fc508c4cc8292d922f076dc51e01" # Account id not pubkey
+      lib.ft4.core.accounts:
+        auth_flags:
+          mandatory: "T"
+        auth_descriptor:
+          max_number_per_account: 100
+          max_rules: 4
+        rate_limit:
+          active: 1
+          max_points: 20
+          recovery_time: 5000
+          points_at_account_creation: 20
+      lib.ft4.core.admin:
+        admin_pubkey: 028C265BA85CC24B4DAE9DC29D6CAAD708731EA0C79CA6559A91FF99728A395851
+      contracts:
+        masterchef: x"128985087b1818714f67e494a076ca0284c060fabc5d2ba66885b4ac60f801d3f5"
+        staking_account_treasury: x"228985087b1818714f67e494a076ca0284c060fabc5d2ba66885b4ac60f801d3f5"
+        uniswap_account_treasury: x"328985087b1818714f67e494a076ca0284c060fabc5d2ba66885b4ac60f801d3f5"
+        admin_evm_address: x"1d169b65CD4aAf8dB0eF8869c767b354d5894A10"
+        uniswap_lp_icon_domain: "https://colorpool-assets.colorpool.xyz/images/tokens/" # URL pattern prefix + name + ".png"
+        farming_reward_symbol: "COLOR"
+        is_access_mint: false
+  Sidechain3:
+    config:
+      gtx:
+        modules:
+          - "net.postchain.d1.iccf.IccfGTXModule"
+    module: sidechain
+    moduleArgs:
+      lib.ft4.core.accounts:
+        auth_descriptor:
+          max_number_per_account: 4
+          max_rules: 4
+      lib.ft4.core.admin:
+        admin_pubkey: 02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06
+libs:
+  ft4:
+    registry: https://gitlab.com/chromaway/ft4-lib.git
+    path: rell/src/lib/ft4
+    tagOrBranch: v1.0.0r
+    rid: x"FA487D75E63B6B58381F8D71E0700E69BEDEAD3A57D1E6C1A9ABB149FAC9E65F"
+    insecure: false
+  iccf:
+    registry: https://gitlab.com/chromaway/core/directory-chain
+    path: src/iccf
+    tagOrBranch: 1.32.2
+    rid: x"1D567580C717B91D2F188A4D786DB1D41501086B155A68303661D25364314A4D"
+
+compile:
+  rellVersion: 0.13.13
+test:
+  modules:
+    - test
+  moduleArgs:
+    lib.ft4.core.accounts.strategies.transfer:
+      rules:
+        - sender_blockchain: x"0000000000000000000000000000000000000000000000000000000000000000"
+          sender: "*"
+          recipient: "*"
+          asset:
+            issuing_blockchain_rid: x"0000000000000000000000000000000000000000000000000000000000000000"
+            name: "Chromia"
+            min_amount: 10000000L
+          timeout_days: 15
+          strategy: # List of transfer strategies to enable
+            - "fee"
+    lib.ft4.core.accounts.strategies.transfer.fee:
+      asset:
+        - name: Chromia # We can specify an asset by id
+          amount: 10000000000000000000L # How much of this asset to pay
+        - name: Color # we can specify an asset by name, this will refer to an asset issued by this chain
+          amount: 10000000000000000000000L
+        - name: bUSDC
+          amount: 2000000L
+      fee_account: x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06" # All fees will be collected into this account
+    lib.ft4.core.accounts:
+      auth_flags:
+        mandatory: "T"
+      rate_limit:
+        max_points: 20
+        recovery_time: 5000
+        points_at_account_creation: 10
+    lib.ft4.core.admin:
+      admin_pubkey: 02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06
+    contracts:
+      masterchef: x"128985087b1818714f67e494a076ca0284c060fabc5d2ba66885b4ac60f801d3f5"
+      staking_account_treasury: x"228985087b1818714f67e494a076ca0284c060fabc5d2ba66885b4ac60f801d3f5"
+      uniswap_account_treasury: x"328985087b1818714f67e494a076ca0284c060fabc5d2ba66885b4ac60f801d3f5"
+      admin_evm_address: x"02697a349d92481f231d5154975f951591eb60a6d386904ad7b26429cba39b0e06"
+      uniswap_lp_icon_domain: "https://api.dex-uat.colorpool.xyz/images/"
+      farming_reward_symbol: "Color"
+      is_access_mint: true
+
+database:
+  schema: schema_amm_dex
+
+deployments:
+  testnet: #Deployment Target name
+    brid: x"6F1B061C633A992BF195850BF5AA1B6F887AEE01BB3F51251C230930FB792A92" #Blockchain RID for the testnet management chain
+    url: https://node0.testnet-asgard.chromia.com:7740 #Target URL for one of the nodes in the testnet
+    container: e53010f352c1b137c1a3576bf2eb5be39e288a63197587accdf38b90d6a9e765
+
+    chains:
+      ChromiaDEX2: x"F91E683BF7FB5EBE32F4F7ADE4AB85EB6492EBD8461C417654ECCC08252C6B55"
+      Sidechain2: x"DC28052E646AB87D61E8779FC7FAB4D98F1EA64E9DE73B0E7460B8B7B1BD374A"
+      ChromiaDEX3: x"EF71D90A01B5A3743EB954BDC5AD0592E46891A0B26FE52169F4143D879B0DB0"
+      Mockchain: x"FA667A86AEDBC66E8F9D0870987A5DF167DD6938D70ED993E6395ABA1D7EA9DD"
+      Mockchain2: x"5CD19E0D8CC289C74AF5F877A4B19E4CFE83C323A97E5C6D1C33BFFD3890DCAE"
+      ChromiaDEX4: x"31816BD55D217B42E7D4F955CF1E757CAFEF88362599742249F413DC66FF9BC1"
+      Sidechain3: x"A5445BC839BBDC432A6FF53421642CFB8EDF704CBE671F4CBB49B5A284FE2FB7"
+      Mockchain3: x"60E5275B871FC4FD455089166F1786B179C8749EA0591FD465904A9DC1487003"
+      Mockchain5: x"4812D6592350DD638F9A3BF01C447904AC1BA4136C1B698BAEDC657B56C0C054"
+      dex_cp1: x"E592E9C2A048753CB39818B9926A1FD09F4BD02CD673648284356540BC9ADD4E"

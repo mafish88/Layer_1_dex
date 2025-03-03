@@ -1,0 +1,16 @@
+function validate_string_length(value: text,  message: text = "Input", expected_maximum_length: integer = 100) {
+    require(value.size() <= expected_maximum_length and value.size() > 0,
+        message + " with value '%s' has invalid length ".format(value) + value.size() + ". Length must be greater than 0 and less than '%s'.".format(expected_maximum_length)
+    );
+}
+
+function is_valid_url(url: text) = url.matches(
+    "^((https?:\\/\\/)|(filehub:\\/\\/))(?:www\\.)?[-a-zA-Z0-9@:%._\\+~#=]{1,256}(\\.[a-zA-Z0-9()]{1,6}\\b)?([-a-zA-Z0-9()@:%_\\+.~#?&\\\\/=]*)$"
+);
+
+function validate_url(url: text, message: text = "Invalid URL") = 
+    require(is_valid_url(url), "%s %s".format(message, url));
+
+function require_admin_signer() {
+    admin.require_admin();
+}

@@ -1,0 +1,7 @@
+enum dapp_content_type {
+    landscape,
+    portrait,
+    promotional,
+    video,
+    icon
+}

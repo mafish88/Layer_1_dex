@@ -1,0 +1,17 @@
+{
+  "dependencies": {
+    "@chromia/ft4": "^1.0.1",
+    "@types/secp256k1": "^4.0.6",
+    "bigintjs": "^0.3.5",
+    "crypto-browserify": "^3.12.0",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.2",
+    "postchain-client": "^1.18.0",
+    "secp256k1": "^5.0.0",
+    "ts-node": "^10.9.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "typescript": "^5.6.2"
+  }
+}

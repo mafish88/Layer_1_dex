@@ -1,0 +1,21 @@
+entity dapp {
+    key name;
+    mutable description: text = "";
+    mutable launch_url: text = "";
+    mutable genre: text = "";
+    mutable validated: boolean = false;
+}
+
+entity dapp_media {
+    key dapp, name;
+    mutable url: text = "";
+    type: dapp_content_type;
+}
+
+entity blockchain {
+    key dapp, brid: byte_array;
+    index brid;
+    index mutable name: text;
+    mutable role: text;
+    mutable validated: boolean = false;
+}

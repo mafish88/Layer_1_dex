@@ -1,0 +1,76 @@
+//**SECTION - Stake history */
+function map_pool_info(pool_info: pool_info) {
+    return (
+        id = pool_info.id,
+        name = pool_info.asset.name,
+        symbol = pool_info.asset.symbol,
+        decimals = pool_info.asset.decimals,
+        blockchain_rid = pool_info.asset.issuing_blockchain_rid,
+        icon_url = pool_info.asset.icon_url,
+        type = pool_info.asset.type,
+        supply = pool_info.asset.total_supply
+    );
+}
+
+//**SECTION - Pool Info */
+function increase_pool_info_balance(user: account, pool_info: pool_info, amount: big_integer): big_integer {
+    val balance = pool_info_balance @? { .user == user, .pool_info == pool_info };
+    if (balance != null) {
+        val new_amount = balance.amount + amount;
+        balance.amount = new_amount;
+        return new_amount;
+    } else {
+        create pool_info_balance (user, pool_info, amount );
+        return amount;
+    }
+}
+
+function deduct_pool_info_balance(user: account, pool_info: pool_info, amount: big_integer): big_integer {
+    val balance = pool_info_balance @? { .user == user, .pool_info == pool_info };
+    require(balance, "User does not have pool_info <%s> in masterchef <%s>".format(pool_info.id, user.id));
+    require(balance.amount >= amount, "Balance is too low");
+
+    if (balance.amount - amount == 0L) {
+        delete balance;
+        return 0L;
+    } else {
+        val new_amount = balance.amount - amount;
+        balance.amount = new_amount;
+        return new_amount;
+    }
+}
+
+function get_pool_info_balance(user_id: byte_array, pool_info_id: byte_array): big_integer {
+    val user = account @ { .id == user_id };
+    val pool_info = pool_info @ { .id == pool_info_id };
+    val balance = pool_info_balance @? { .user == user, .pool_info == pool_info };
+    return if (balance != null) balance.amount else 0L;
+}
+
+// with other param
+function check_pool_info_balance(user_id: byte_array, asset_name: name): big_integer {
+    val pool_info_id = get_asset_id(asset_name);
+    val user = account @ { .id == user_id };
+    val pool_info = pool_info @ { .id == pool_info_id };
+    val pool_info_balance = pool_info_balance @? { .user == user, .pool_info == pool_info };
+    return if (pool_info_balance != null) pool_info_balance.amount else 0L;
+}
+
+function get_reward_debt(user_id: byte_array, pool_info_id: byte_array): big_integer {
+    val user = account @ { .id == user_id };
+    val pool_info = pool_info @ { .id == pool_info_id };
+    val pool_info_balance = pool_info_balance @? { .user == user, .pool_info == pool_info };
+    return if (pool_info_balance != null) pool_info_balance.reward_debt else 0L;
+}
+
+function get_pool_info(asset_id: byte_array) {
+    return pool_info @ { .id == asset_id };
+}
+
+function token_balance_debt(user: account, pool_info: pool_info) {
+    return pool_info_balance @? { .user == user, .pool_info == pool_info };
+}
+
+function require_pool_info(asset: assets.asset) {
+    require(pool_info @? { .id == asset.id }, "pool_info does not exist");
+}

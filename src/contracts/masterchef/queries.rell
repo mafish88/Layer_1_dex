@@ -1,0 +1,268 @@
+query get_reward_token_farming(): asset {
+    return get_asset_by_symbol(get_module_args().farming_reward_symbol);
+}
+
+// Token queries
+query check_pool_exists(asset_symbol: name) {
+    val asset = get_asset_by_symbol(asset_symbol);
+    return pool_info @ { .id == asset.id } ( @sum 1 );
+}
+
+//history
+query get_transfer_history(pubkey: byte_array) {
+
+    val filter = assets.filter(assets.transfer_type.value("sent"));
+    val asset_id = ("USDC", chain_context.blockchain_rid).hash();
+    val asset = assets.asset @ { .id == asset_id };
+    val account = get_account_by_pubkey(pubkey);
+    return assets
+        .get_paginated_transfers(
+            account = account,
+            height = 0,
+            filter = filter,
+            asset = asset,
+            page_size = 10,
+            page_cursor = null
+        );
+}
+
+query get_stake_history(pubkey: byte_array?, pool_id: byte_array) {
+    val user = account @? { .id == pubkey };
+    val pool_info = pool_info @? { .id == pool_id };
+    return get_paginated_stake_history(
+        user = user,
+        pool_info = pool_info,
+        height = 0,
+        is_deposit = true,
+        page_size = 10,
+        page_cursor = null
+    );
+}
+
+query get_harvest_history(pubkey: byte_array?) {
+    val user = account @? { .id == pubkey };
+    return get_paginated_harvest_history(user = user, height = 0, page_size = 10, page_cursor = null);
+}
+
+query get_pool_info_updated(pool_id: rowid) {
+    return pool_info_updated_history @* { .pool_info.rowid == pool_id } ( $.to_struct() );
+}
+
+query get_lp_pool_info(user: text): list<lp_pool_info> {
+    val data = test_inner_join(user);
+
+    val result: list<lp_pool_info> = [];
+
+    for ((pool, user_data) in data) {
+
+        val total_staked_liquidity = get_asset_balance(get_account_by_pubkey(get_lock_acc_from_masterchef_acc_treasury()), pool.asset);
+
+        var reward_per_year: big_integer = 0;
+        if (app_meta_masterchef.total_alloc_point > 0) {
+            val reward_per_sec_internal: big_integer = app_meta_masterchef.reward_per_sec;
+            reward_per_year = reward_per_sec_internal * pool
+                .alloc_point * 31536000 / app_meta_masterchef
+                .total_alloc_point;
+        }
+
+        val pair_manager = get_pair_with_lp_asset_symbol(pool.asset.symbol);
+        if (pair_manager != null) {
+            val asset0_symbol = pair_manager.asset0_symbol;
+            val asset1_symbol = pair_manager.asset1_symbol;
+
+            if (user_data != null) {
+                result.add(
+                    lp_pool_info(
+                        lp_asset = pool.asset,
+                        lp_asset_name = pool.asset.name,
+                        lp_asset_symbol = pool.asset.symbol,
+                        lp_asset_decimals = pool.asset.decimals,
+                        asset0_symbol = asset0_symbol,
+                        asset1_symbol = asset1_symbol,
+                        APR = 0,
+                        staked_liquidity = get_asset_balance(get_account_by_pubkey(get_lock_acc_from_masterchef_acc_treasury()), pool.asset),
+                        reward_per_day = reward_per_year / 365,
+                        user_staked_amount = user_data.amount,
+                        last_update_time = pool.last_reward,
+                        acc_reward_per_share = pool.acc_reward_per_share,
+                        reward_debt = user_data.reward_debt,
+                        total_staked_liquidity = total_staked_liquidity,
+                        total_reward_per_year = reward_per_year,
+                        alloc_point = pool.alloc_point,
+                        rowid = pool.rowid
+                    )
+                );
+            } else {
+                result.add(
+                    lp_pool_info(
+                        lp_asset = pool.asset,
+                        lp_asset_name = pool.asset.name,
+                        lp_asset_symbol = pool.asset.symbol,
+                        lp_asset_decimals = pool.asset.decimals,
+                        asset0_symbol = asset0_symbol,
+                        asset1_symbol = asset1_symbol,
+                        APR = 0,
+                        staked_liquidity = get_asset_balance(get_account_by_pubkey(get_lock_acc_from_masterchef_acc_treasury()), pool.asset),
+                        reward_per_day = reward_per_year / 365,
+                        user_staked_amount = 0,
+                        last_update_time = pool.last_reward,
+                        acc_reward_per_share = pool.acc_reward_per_share,
+                        reward_debt = 0,
+                        total_staked_liquidity = total_staked_liquidity,
+                        total_reward_per_year = reward_per_year,
+                        alloc_point = pool.alloc_point,
+                        rowid = pool.rowid
+                    )
+                );
+            }
+        }
+    }
+    return result;
+}
+
+/**
+ * Retrieves liquidity pool information based on the provided asset symbols.
+ * 
+ * @param asset_symbol_0 - The symbol of the first asset in the pair.
+ * @param asset_symbol_1 - The symbol of the second asset in the pair.
+ * @return An object containing the reward per year and the total value locked in the liquidity pool.
+ */
+query get_lp_pool_info_with_symbol(asset_symbol_0: text, asset_symbol_1: text) {
+    // Retrieve the asset objects using their symbols
+    val asset_0 = get_asset_by_symbol(asset_symbol_0);
+    val asset_1 = get_asset_by_symbol(asset_symbol_1);
+    
+    // Get the pair manager for the asset pair
+    val pair_manager = get_force_pair(asset_0, asset_1);
+    
+    // Fetch the pool information for the liquidity pair asset
+    val pool = pool_info @ { .asset == pair_manager.lp_asset };
+
+    // Calculate the total staked liquidity for the liquidity pair asset
+    val total_staked_liquidity = get_asset_balance(get_account_by_pubkey(get_lock_acc_from_masterchef_acc_treasury()), pair_manager.lp_asset);
+    
+    // Initialize the reward per year
+    var reward_per_year: big_integer = 0;
+    
+    // Calculate the reward per year if the total allocation point is greater than zero
+    if (app_meta_masterchef.total_alloc_point > 0) {
+        val reward_per_sec_internal: big_integer = app_meta_masterchef.reward_per_sec;
+        reward_per_year = reward_per_sec_internal * pool.alloc_point * 31536000 / app_meta_masterchef.total_alloc_point;
+    }
+
+    // Return the calculated reward per year and total value locked
+    return (reward_per_year = reward_per_year, total_value_locked = total_staked_liquidity);
+}
+
+query get_all_pool_info(): list<pool_info> {
+    return pool_info @* { };
+}
+
+query get_all_user_data(): list<pool_info_balance> {
+    return pool_info_balance @* { };
+}
+
+query test_inner_join(user: text): list<(pool_info, pool_info_balance?)> {
+    return (
+        p: pool_info,
+        @outer u: pool_info_balance @* { u.user.id == byte_array(user), u.pool_info == p }
+    ) @* { } (
+        p,
+        u
+    );
+}
+
+// user_info -> pool_info_balance 
+query get_user_info(pubkey: byte_array, asset_name: text) {
+    val asset_id = (asset_name, chain_context.blockchain_rid).hash();
+    val user_info = pool_info_balance @? { .user.id == pubkey, .pool_info.asset.id == asset_id };
+    if (empty(user_info)) return null;
+    return (user_info.amount, user_info.reward_debt);
+}
+
+query get_reward_asset() =  get_reward_token_farming().to_struct();
+
+/**
+ * Retrieves the transaction history for farming activities, including staking, unstaking, and harvesting.<br>
+ * @param user - The account id of the user.<br>
+ * @param page - The page number for pagination.<br>
+ * @param page_size - The number of records per page.<br>
+ * @return A list of transaction history records with metadata.
+ */
+query get_transactions_history_farming(
+    user: byte_array,
+    page: integer,
+    page_size: integer
+): list_transaction_history_farming_rs {
+
+    val account = get_account_by_pubkey(user);
+    // Fetch harvest transactions and map them to DTOs
+    val list_tx_harvest = (
+        hh: harvest_history_entry,
+        tx: transaction,
+        b: block
+    ) @* {
+        hh.transaction == tx,
+        tx.block == b,
+        hh.user == account
+    } (
+        tx_history_farming_dto (
+            tx_hash = tx.tx_hash.to_hex(),
+            timestamp = b.timestamp,
+            asset_info = get_asset_farming_info(hh.pool_info.asset.symbol),
+            lp_decimals = hh.pool_info.asset.decimals,
+            amount_token = hh.amount,
+            farming_type = farming_history_type.claim_reward
+        )
+    );
+    
+    // Fetch stake and unstake transactions and map them to DTOs
+    val list_tx_farming = (
+        sh: stake_history_entry,
+        tx: transaction,
+        b: block
+    ) @* {
+        sh.transaction == tx,
+        tx.block == b,
+        sh.user == account
+    } (
+        tx_history_farming_dto (
+            tx_hash = tx.tx_hash.to_hex(),
+            timestamp = b.timestamp,
+            asset_info = get_asset_farming_info(sh.pool_info.asset.symbol),
+            lp_decimals = sh.pool_info.asset.decimals,
+            amount_token = sh.amount,
+            farming_type = if (sh.is_deposit) farming_history_type.stake else farming_history_type.unstake
+        )
+    );
+    
+    // Combine harvest and farming transactions into a single list
+    list_tx_farming.add_all(list_tx_harvest);
+
+    // Calculate the total number of transactions
+    val total_row = list_tx_farming.size();
+
+    // Paginate the combined transaction list
+    val data = list_tx_farming @* { } ( $, @omit @sort_desc .timestamp ) offset (
+        (page - 1) * page_size
+    ) limit page_size;
+
+    // Generate metadata for the paginated results
+    val metadata_rs = get_metadata_list(total_row, page, page_size);
+
+    // Return the paginated transaction history with metadata
+    return list_transaction_history_farming_rs(data = data, metadata = metadata_rs);
+}
+
+query get_asset_farming_info(lp_asset_symbol: text): asset_farming_dto? {
+    val lp_asset = get_asset_by_symbol(lp_asset_symbol);
+    val pair = pair_manager @? { .lp_asset == lp_asset };
+    if (pair == null) return null;
+
+    return asset_farming_dto(
+        asset0_symbol = pair.asset0.symbol,
+        asset0_icon = pair.asset0.icon_url,
+        asset1_symbol = pair.asset1.symbol,
+        asset1_icon = pair.asset1.icon_url
+    );
+}

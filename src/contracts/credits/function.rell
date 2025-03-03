@@ -1,0 +1,245 @@
+import lib.ft4.assets;
+import lib.ft4.crosschain;
+
+@extend(assets.before_transfer)
+function (from: accounts.account, to: accounts.account, asset, amount: big_integer) {
+    print("Go to before transfer", op_context.get_current_operation().name);
+    if (
+        op_context.get_current_operation().name == "ft4.transfer"
+        or
+        op_context.get_current_operation().name == "transfer"
+    ) {
+        _resolver_credit(from.id, "transfer");
+    }
+}
+
+@extend(crosschain.before_init_transfer)
+function (
+    sender: accounts.account,
+    recipient_id: byte_array,
+    assets.asset,
+    amount: big_integer,
+    hops: list<byte_array>,
+    deadline: timestamp
+) {
+    print("Go to before init transfer");
+    _resolver_credit(sender.id, "init_transfer");
+}
+
+@extend(crosschain.before_apply_transfer)
+function (
+    sender_blockchain_rid: byte_array,
+    sender_account_id: byte_array,
+    recipient_id: byte_array,
+    assets.asset,
+    amount: big_integer,
+    hop_index: integer,
+    is_final: boolean
+) {
+    if (is_final != true) {
+        print("Go to before apply transfer");
+        _resolver_credit(sender_account_id, "apply_transfer");
+    } else {
+        print("Go to before complete transfer");
+        _resolver_credit(sender_account_id, "complete_transfer");
+    }
+}
+
+function _is_free_credit_for_user(user_id: byte_array, time_begin_day: big_integer): boolean {
+    // find in db
+    return credit_history_record @? { .id == (user_id, time_begin_day).hash() } ( @sum 1 ) == 1;
+}
+
+function _create_or_update_credit_override_balance_return_account(
+    account: account,
+    remaining_credit_amount: big_integer,
+    daily_free_amount: big_integer,
+    is_reset_daily: boolean
+): byte_array? {
+    val credit_data = credit_asset_override_balance @? { .account == account };
+    if (credit_data == null) {
+        create credit_asset_override_balance (
+            account = account,
+            remaining_credit_amount = 0L,
+            daily_free_amount = 0L
+        );
+    }
+
+    val data = credit_asset_override_balance @ { .account == account };
+
+    if (is_reset_daily) {
+        update data (
+            daily_free_amount = 0L
+        );
+    }
+
+    update data (
+        remaining_credit_amount = data.remaining_credit_amount + remaining_credit_amount,
+        daily_free_amount = data.daily_free_amount + daily_free_amount
+    );
+
+    if (data.daily_free_amount < 0L and data.remaining_credit_amount + data.daily_free_amount < 0L) {
+        return null;
+    } else if (data.daily_free_amount < 0L) {
+        val old_daily_free_amount = data.daily_free_amount;
+        update data (
+            remaining_credit_amount = data.remaining_credit_amount + old_daily_free_amount,
+            daily_free_amount = 0L
+        );
+    }
+
+    if (data.remaining_credit_amount < 0L or data.daily_free_amount < 0L) {
+        return null;
+    }
+
+    print("User data credit asset override balance3", data.remaining_credit_amount, data.daily_free_amount);
+
+    return data.account.id;
+}
+
+function _create_or_update_credit_override_balance(
+    account: account,
+    remaining_credit_amount: big_integer,
+    daily_free_amount: big_integer,
+    credit_use_type: credit_action,
+    created_by: account,
+    is_reset_daily: boolean
+): byte_array? {
+    val account_id = _create_or_update_credit_override_balance_return_account(
+        account,
+        remaining_credit_amount,
+        daily_free_amount,
+        is_reset_daily
+    );
+    require(
+        account_id != null,
+        "Credit is not enough"
+    );
+
+    if (is_reset_daily == false) {
+        // create new record history
+        create credit_history_record (
+            id = (op_context.transaction.tx_rid, op_context.op_index, credit_use_type).hash(),
+            account = account,
+            credit_use = credit_use_type,
+            amount_changed = when (remaining_credit_amount) {
+                0L -> daily_free_amount;
+                else -> remaining_credit_amount
+            },
+            created_by = created_by
+        );
+    }
+
+    return account_id;
+}
+
+function _daily_free_credit(user_id: byte_array, time_begin_day: big_integer) {
+    if (_is_free_credit_for_user(user_id, time_begin_day) == false) {
+        // create new record history
+        create credit_history_record (
+            id = (user_id, time_begin_day).hash(),
+            account = get_account_by_pubkey(user_id),
+            credit_use = credit_action.DAILY_FREE,
+            amount_changed = app_meta_credit.daily_free_credit_amount,
+            created_by = get_account_by_pubkey(user_id)
+        );
+
+        _create_or_update_credit_override_balance(
+            get_account_by_pubkey(user_id),
+            0L,
+            app_meta_credit.daily_free_credit_amount,
+            credit_action.DAILY_FREE,
+            get_account_by_pubkey(user_id),
+            true
+        );
+    }
+}
+
+function _resolver_credit(
+    account_id: byte_array,
+    op_name: text
+): byte_array? {
+
+    val (fee, type) = when (op_name) {
+        "transfer" -> (app_meta_credit.transfer_credit_amount, credit_action.TRANSFER_ASSET);
+
+        "add_liquidity" -> (app_meta_credit.add_liquidity_credit_amount, credit_action.UNISWAP_ADD_LIQUIDITY);
+        "create_pair" -> (app_meta_credit.create_pair_credit_amount, credit_action.UNISWAP_CREATE_PAIR);
+        "remove_liquidity" -> (app_meta_credit.remove_liquidity_credit_amount, credit_action.UNISWAP_REMOVE_LIQUIDITY);
+
+        "swap_exact_tokens_for_tokens", "swap_tokens_for_exact_tokens" -> (app_meta_credit.swap_credit_amount, credit_action.UNISWAP_SWAP);
+        
+        "enter" -> (app_meta_credit.stake_credit_amount, credit_action.STAKING_DEPOSIT);
+        "exit" -> (app_meta_credit.unstake_credit_amount, credit_action.STAKING_WITHDRAW);
+        
+        "deposit" -> (app_meta_credit.farming_deposit_credit_amount, credit_action.MASTERCHEF_DEPOSIT);
+        "withdraw" -> (app_meta_credit.farming_withdraw_credit_amount, credit_action.MASTERCHEF_WITHDRAW);
+        "harvest" -> (app_meta_credit.farming_harvest_credit_amount, credit_action.MASTERCHEF_HARVEST);
+
+        "top_up_credit_for_user" -> (app_meta_credit.top_up_credit_for_user_credit_amount, credit_action.TOP_UP_CREDIT_FOR_USER);
+        "emergency_withdraw" -> (app_meta_credit.farming_emergency_withdraw_credit_amount, credit_action.MASTERCHEF_EMERGENCY_WITHDRAW);
+
+        "set_fee_to" -> (app_meta_credit.set_fee_to_credit_amount, credit_action.UNISWAP_SET_FEE_TO);
+
+        "set_fee_to_setter" -> (app_meta_credit.set_fee_to_setter_credit_amount, credit_action.UNISWAP_SET_FEE_TO_SETTER);
+
+        "register_asset_by_operator" -> (app_meta_credit.register_asset_credit_amount, credit_action.REGISTER_ASSET);
+        "register_crosschain_asset_by_operator" -> (app_meta_credit.register_asset_credit_amount, credit_action.REGISTER_ASSET);
+
+        "register_account_by_operator" -> (app_meta_credit.register_account_credit_amount, credit_action.REGISTER_ACCOUNT);
+
+        "add_staking_pair" -> (app_meta_credit.create_pair_x_token_staking_credit_amount, credit_action.CREATE_PAIR_X_TOKEN_STAKING);
+        "admin_withdraw_swap_fee" -> (app_meta_credit.withdraw_fee_to_staking_credit_amount, credit_action.WITHDRAW_FEE_TO_STAKING);
+
+        "add_lp_token" -> (app_meta_credit.create_pool_farming_credit_amount, credit_action.CREATE_POOL_FARMING);
+        "set_pool_alloc_point" -> (app_meta_credit.set_pool_alloc_point_credit_amount, credit_action.SET_POOL_ALLOC_POINT);
+
+        "new_signer_treasury" -> (app_meta_credit.update_treasury_credit_amount, credit_action.UPDATE_TREASURY);
+
+        "init_transfer" -> (app_meta_credit.init_transfer_credit_amount, credit_action.CROSSCHAIN_INIT_TRANSFER);
+        "apply_transfer" -> (app_meta_credit.apply_transfer_credit_amount, credit_action.CROSSCHAIN_APPLY_TRANSFER);
+        "complete_transfer" -> (app_meta_credit.complete_transfer_credit_amount, credit_action.CROSSCHAIN_COMPLETE_TRANSFER);
+
+        else -> (app_meta_credit.other_action, credit_action.OTHER);
+    };
+
+    if (check_account_exists(account_id) == false) {
+        _credit_for_user(account_id, fee);
+        return account_id;
+    }else {
+        _daily_free_credit(account_id, get_time_begin_day(op_context.last_block_time));
+
+        return _create_or_update_credit_override_balance(
+            get_account_by_pubkey(account_id),
+            0L,
+            fee,
+            type,
+            get_account_by_pubkey(account_id),
+            false
+        );
+    }
+
+    
+}
+
+function _is_pending_credit_for_user(user_id: byte_array): boolean {
+    return pending_credit_for_user @? { .id == user_id } ( @sum 1 ) == 1;
+}
+
+function _credit_for_user(user_id: byte_array, amount: big_integer) {
+    if (_is_pending_credit_for_user(user_id) == false) {
+        create pending_credit_for_user (
+            id = user_id,
+            amount = 0L
+        );
+    }
+
+    val pending_credit = pending_credit_for_user @ { .id == user_id };
+    update pending_credit (
+        amount = pending_credit.amount + amount
+    );
+}
+
+
+
+

@@ -1,0 +1,39 @@
+operation top_up_credit_for_user(account_id: text, amount: big_integer) {
+    require(is_valid_account_id(account_id), "INVALID_ACCOUNT_ID");
+    val account_admin = auth.authenticate();
+
+    _daily_free_credit(byte_array(account_id), get_time_begin_day(op_context.last_block_time));
+
+    _create_or_update_credit_override_balance(
+        get_account_by_pubkey(byte_array(account_id)),
+        amount,
+        0L,
+        credit_action.TOP_UP,
+        account_admin,
+        false
+    );
+}
+
+operation admin_change_credit_daily_amount(amount: big_integer) {
+    admin.require_admin();
+
+    update app_meta_credit (
+        daily_free_credit_amount = amount
+    );
+}
+
+operation admin_change_stake_credit_amount(amount: big_integer) {
+    admin.require_admin();
+
+    update app_meta_credit (
+        stake_credit_amount = amount
+    );
+}
+
+operation admin_change_unstake_credit_amount(amount: big_integer) {
+    admin.require_admin();
+
+    update app_meta_credit (
+        unstake_credit_amount = amount
+    );
+}

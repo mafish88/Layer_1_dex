@@ -1,0 +1,64 @@
+@test module;
+
+
+import lib.ft4.test.utils. { ft_auth_operation_for };
+import lib.ft4.external.assets.{ get_asset_balance} ;
+import lib.ft4.external.accounts. { get_accounts_by_signer};
+import lib.ft4.external.admin.crosschain. {register_crosschain_asset};
+
+import contracts.common.*;
+import lib.ft4.assets;
+
+
+val alice = rell.test.pubkeys.alice;
+val bob = rell.test.pubkeys.bob;
+val alice_kp = rell.test.keypairs.alice; 
+val bob_kp = rell.test.keypairs.bob;
+val admin_pub =  x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06";
+val admin_kp = rell.test.keypair(
+    priv = x"DACA68A6085937879759F316D51310DFB5FB23006B1B5DFA63AE01308D17F67D",
+    pub = x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06"
+);
+
+val issuing_blockchain_rid = x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E";
+val issuing_blockchain_rid2 = x"12697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E";
+
+function register_asset_crosschain_script(
+    asset_name: name, 
+    symbol: text,
+    blockchain_rid: byte_array
+) {
+    val asset_id = (asset_name, blockchain_rid).hash();
+    val type = assets.ASSET_TYPE_FT4;
+    val uniqueness_resolver=byte_array("");
+    rell.test.tx()
+        .op(register_crosschain_asset(
+            asset_id,
+            asset_name, 
+            symbol, 
+            18, 
+            blockchain_rid,
+            "https://icon.com",
+            type,
+            uniqueness_resolver,
+            blockchain_rid
+        ))
+        .sign(admin_kp)
+        .run();  
+}
+
+
+function test_register_asset_crosschain() {
+    print("register_asset_crosschain_script");
+    register_asset_crosschain_script("ETH", "ETH", issuing_blockchain_rid);
+    register_asset_crosschain_script("USDC", "USDC", issuing_blockchain_rid);
+
+    register_asset_crosschain_script("BTC", "BTC", issuing_blockchain_rid2);
+
+    val data = get_brid_supported_chains("");
+    print("data", data);
+
+    val data2 = get_asset_supported_on_chain(issuing_blockchain_rid);
+    print("data2", data2);
+}
+

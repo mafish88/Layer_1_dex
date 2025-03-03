@@ -1,0 +1,176 @@
+@test module;
+
+import lib.ft4.test.utils. { ft_auth_operation_for };
+import lib.ft4.external.assets.{ get_asset_balance} ;
+import lib.ft4.external.accounts. { get_accounts_by_signer, get_account_by_id};
+import lib.ft4.external.accounts.strategies. { register_account };
+import lib.ft4.core.accounts.strategies.transfer.fee. { ras_transfer_fee };
+import lib.ft4.external.assets.{ transfer };
+import contracts.common.*;
+import contracts.credits.*;
+import contracts.staking.*;
+
+import lib.ft4.external.admin. { mint, register_asset };
+
+val alice = rell.test.pubkeys.alice;
+val bob = rell.test.pubkeys.bob;
+val charlie = rell.test.pubkeys.charlie;
+val alice_kp = rell.test.keypairs.alice; 
+val bob_kp = rell.test.keypairs.bob;
+val charlie_kp = rell.test.keypairs.charlie;
+val admin_pub = x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06";
+val admin_kp = rell.test.keypair(
+        priv = x"DACA68A6085937879759F316D51310DFB5FB23006B1B5DFA63AE01308D17F67D",
+        pub = x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06"
+    );
+
+function register_account_script(user_kp: rell.test.keypair) {
+    val asset = get_asset_by_symbol("CHR");
+    print("this is asset", asset);
+
+    admin_mint_for_user(
+        get_account_by_pubkey(admin_pub),
+        asset,
+        1000000000000000000000000L
+    );
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            transfer(
+                user_kp.pub.hash(),
+                asset.id,
+                1000000000000000000000000L
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    rell.test.tx()
+        .op(
+            ras_transfer_fee(
+                asset.id,
+                single_sig_auth_descriptor(user_kp.pub, set(["T"])),
+                null
+            )
+        )
+        .op(register_account())
+        .sign(user_kp)
+        .run();
+}
+
+function create_account() {
+    register_account_script(alice_kp);
+    register_account_script(bob_kp);
+    register_account_script(admin_kp);
+    register_account_script(charlie_kp);
+}
+
+function add_operator_for_admin(operator: byte_array) {
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(add_operator(operator.hash().to_hex()))
+        .sign(admin_kp)
+        .run();
+}
+
+function deploy_token_script(asset_name: name, symbol: text, decimals: integer, icon_url: text) {
+    rell.test.tx()
+        .nop()
+        .op(register_asset(asset_name, symbol, decimals, icon_url))
+        .sign(admin_kp)
+        .run();
+}
+
+function admin_mint_for_user(user: account, asset: asset, amount: big_integer) {
+    rell.test.tx()
+        .nop()
+        .op(mint(user.id, asset.id, amount))
+        .sign(admin_kp)
+        .run();
+}
+
+function enter_for_user(user: byte_array, user_kp: rell.test.keypair, asset: asset, amount: big_integer) {
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(user))// Auth operation
+        .op(enter(asset.symbol, amount))
+        .sign(user_kp)
+        .run();
+}
+
+function add_staking_pair_for_admin(symbol: text) {
+    rell.test.tx()
+        .op(ft_auth_operation_for(charlie))
+        .op(add_staking_pair(symbol))
+        .sign(charlie_kp)
+        .run();
+}
+
+function test_init_staking() {
+    rell.test.tx()
+        .op(init_staking())
+        .sign(admin_kp)
+        .run();
+        
+    deploy_token_script("Chromia", "CHR", 18, "https://url-to-asset-1-icon");
+}
+
+function change_stake_credit_amount_for_admin(amount: big_integer) {
+    rell.test.tx()
+        .op(admin_change_stake_credit_amount(amount))
+        .sign(admin_kp)
+        .run();
+
+}
+
+function top_up_credit_for_user_script(user_id: text, amount: big_integer) {
+    rell.test.tx()
+        .op(ft_auth_operation_for(charlie))
+        .op(top_up_credit_for_user(user_id, amount))
+        .sign(charlie_kp)
+        .run();
+}
+
+function test_init() {
+    test_init_staking();
+    create_account();
+
+    deploy_token_script("USDC_name", "USDC_symbol", 6, "https://url-to-asset-1-icon");
+    add_operator_for_admin(charlie);
+}
+
+function test_stake() {
+    test_init();
+
+    add_staking_pair_for_admin("USDC_symbol");
+
+    admin_mint_for_user(
+        get_account_by_pubkey(alice.hash()),
+        get_asset_by_symbol("USDC_symbol"),
+        1000000000000000000000000L
+    );
+
+    change_stake_credit_amount_for_admin(-100L);
+
+    for (i in range(7)) {
+        enter_for_user(alice, alice_kp, get_asset_by_symbol("USDC_symbol"), 100L);
+
+        val bal_credit = get_asset_balance_credit_override(alice.hash(), "Credit", rell.test.last_block_time / 1000);
+        print("this is bal_credit", bal_credit);
+    }
+
+    top_up_credit_for_user_script(alice.hash().to_hex(), 200L);
+
+    var bal_credit = get_asset_balance_credit_override(alice.hash(), "Credit", rell.test.last_block_time / 1000);
+    print("this is bal_credit", bal_credit);
+
+    change_stake_credit_amount_for_admin(-200L);
+
+    enter_for_user(alice, alice_kp, get_asset_by_symbol("USDC_symbol"), 100L);
+
+    bal_credit = get_asset_balance_credit_override(alice.hash(), "Credit", rell.test.last_block_time / 1000);
+    print("this is bal_credit", bal_credit);
+}

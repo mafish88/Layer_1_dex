@@ -1,0 +1,31 @@
+module;
+
+import lib.ft4.crosschain;
+import lib.ft4.accounts.strategies.open;
+import lib.ft4.accounts.strategies;
+import lib.ft4.auth;
+import lib.ft4.assets;
+import lib.ft4.accounts;
+
+import lib.ft4.external.admin.*;
+import lib.ft4.external.admin.crosschain.*;
+import lib.ft4.admin;
+import .vault.dapps.external;
+
+operation init(test_asset_issuing_chain: byte_array) {
+    val asset = assets.Unsafe.register_asset(
+            "Test",
+            "TST",
+            6,
+            test_asset_issuing_chain,
+            "http://icon"
+        );
+
+    create crosschain.asset_origin ( asset, test_asset_issuing_chain );
+}
+
+// operation test_mockchain2() {
+//     print("test_mockchain2");
+// }
+
+

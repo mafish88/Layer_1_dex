@@ -1,0 +1,15 @@
+import lib.ft4;
+
+struct module_args {
+    masterchef: pubkey;
+    staking_account_treasury: pubkey;
+    uniswap_account_treasury: pubkey;
+    admin_evm_address: byte_array;
+    uniswap_lp_icon_domain: text;
+    farming_reward_symbol: text;
+    is_access_mint: boolean;
+}
+
+function get_module_args() {
+    return chain_context.args;
+}

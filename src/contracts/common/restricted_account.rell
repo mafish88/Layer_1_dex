@@ -1,0 +1,56 @@
+import lib.ft4.core.accounts.strategies;
+import lib.ft4.core.accounts.strategies.{get_strategy};
+import lib.ft4.core.accounts.strategies.transfer.fee.{account_details};
+import lib.ft4.core.accounts.{get_flags};
+
+
+
+@extend(strategies.after_register_account)
+function (accounts.account) {
+    val tx_operations = op_context.get_all_operations();
+    val strategy_op = tx_operations[op_context.op_index - 1];
+    val strategy_name = strategy_op.name;
+    val strategy_params = strategy_op.args.to_gtv();
+
+    val strategy = get_strategy(strategy_name);
+    val account_details = strategy.account_details(strategy_params);
+
+    // val flags = get_flags(account_details.main);
+
+    // require(
+    //     flags.contains("OPERATOR") == false and flags.contains("A") == false,
+    //     "Operator only register by admin"
+    // );
+
+    _daily_free_credit(
+        account_details.account_id,
+        get_time_begin_day(op_context.last_block_time)
+    );
+
+    _create_or_update_credit_override_balance(
+        get_account_by_pubkey(account_details.account_id),
+        0L,
+        app_meta_credit.register_account_credit_amount,
+        credit_action.REGISTER_ACCOUNT,
+        get_account_by_pubkey(account_details.account_id),
+        false
+    );
+
+    // check pending credit for apply transfer 
+
+    // get pending credit for user
+    val pending_credit = pending_credit_for_user @? { .id == account_details.account_id };
+
+    if (pending_credit != null) {
+        _create_or_update_credit_override_balance(
+            get_account_by_pubkey(account_details.account_id),
+            0L,
+            pending_credit.amount,
+            credit_action.PENDING_CREDIT_CROSSCHAIN,
+            get_account_by_pubkey(account_details.account_id),
+            false
+        );
+        delete pending_credit;
+    }
+
+}

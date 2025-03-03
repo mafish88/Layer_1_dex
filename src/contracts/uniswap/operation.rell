@@ -1,0 +1,288 @@
+operation new_signer_treasury(new_signer_treasury: pubkey) {
+    val caller = auth.authenticate();
+
+    update app_meta_uniswap ( signer_treasury = new_signer_treasury );
+}
+
+//**SECTION - Init operator */
+operation init_uniswap() {
+    admin.require_admin();
+    // get_or_create_account(admin.get_admin_pubkey(), false);
+    get_or_create_account(admin.get_admin_pubkey(), true);
+    val uniswap_treasury_acc = get_or_create_account(get_module_args().uniswap_account_treasury, true);
+
+    val treasury = ensure_lock_account(
+        "FEE_UNISWAP_FOR_STAKING",
+        uniswap_treasury_acc
+    );
+
+
+}
+
+//**SECTION - V2 Factory */
+operation set_fee_to(new_fee_to: pubkey) {
+    val caller = auth.authenticate();
+
+    require(caller.id == app_meta_uniswap.fee_to_setter, "Invalid caller");
+
+    update app_meta_uniswap ( fee_to = new_fee_to );
+    get_or_create_account(new_fee_to, true);
+}
+
+operation set_fee_to_setter(new_fee_to_setter: pubkey) {
+    val caller = auth.authenticate();
+
+    require(caller.id == app_meta_uniswap.fee_to_setter, "Invalid caller");
+
+    update app_meta_uniswap ( fee_to_setter = new_fee_to_setter );
+    get_or_create_account(new_fee_to_setter, true);
+}
+
+operation create_pair(asset0_symbol: text, asset1_symbol: text) {
+    val asset0 = get_asset_by_symbol(asset0_symbol);
+    val asset1 = get_asset_by_symbol(asset1_symbol);
+    val caller = auth.authenticate();
+
+    create_pair_internal(asset0, asset1);
+}
+
+// force balances to match reserves
+operation skim(current_pair: pair_manager, to: account) {
+    val token0: asset = current_pair.asset0;
+    val token1: asset = current_pair.asset1;
+
+    assets
+        .Unsafe
+        .transfer(
+            current_pair
+                .treasury,
+            to,
+            token0,
+            get_asset_balance(
+                current_pair
+                    .treasury,
+                token0
+            ) - current_pair
+                .reserve0
+        );
+    assets
+        .Unsafe
+        .transfer(
+            current_pair
+                .treasury,
+            to,
+            token1,
+            get_asset_balance(
+                current_pair
+                    .treasury,
+                token1
+            ) - current_pair
+                .reserve1
+        );
+}
+
+// force reserves to match balances
+operation sync(current_pair: pair_manager) {
+    update_func(
+        current_pair,
+        get_asset_balance(current_pair.treasury, current_pair.asset0),
+        get_asset_balance(current_pair.treasury, current_pair.asset1),
+        current_pair.reserve0,
+        current_pair.reserve1
+    );
+}
+
+//**SECTION - V2 Router */
+operation add_liquidity(
+    asset_a_symbol: text,
+    asset_b_symbol: text,
+    amount_a_desired: big_integer,
+    amount_b_desired: big_integer,
+    amount_a_min: big_integer,
+    amount_b_min: big_integer,
+    deadline: big_integer,
+    to_id: text
+) {
+
+    val caller = auth.authenticate();
+
+    val asset_a = get_asset_by_symbol(asset_a_symbol);
+    val asset_b = get_asset_by_symbol(asset_b_symbol);
+    val to = get_account_by_pubkey(byte_array(to_id));
+
+    require(deadline >= op_context.last_block_time / 1000, "UniswapV2: EXPIRED");
+
+    var liquidity: big_integer = 0;
+
+    val (
+        amount_a,
+        amount_b
+    ) = _add_liquidity(
+        asset_a,
+        asset_b,
+        amount_a_desired,
+        amount_b_desired,
+        amount_a_min,
+        amount_b_min
+    );
+
+    val current_pair = get_force_pair(asset_a, asset_b);
+
+    assets.Unsafe.transfer(caller, current_pair.treasury, asset_a, amount_a);
+    assets.Unsafe.transfer(caller, current_pair.treasury, asset_b, amount_b);
+
+    liquidity = mint(current_pair, to);
+
+    create uniswap_history_transaction (
+        .user = caller,
+        .token0 = asset_a,
+        .token1 = asset_b,
+        .amount0 = amount_a,
+        .amount1 = amount_b,
+        .amount_lp = liquidity,
+        .type = uniswap_history_type.add_liquidity,
+    );
+}
+
+operation remove_liquidity(
+    asset_a_symbol: text,
+    asset_b_symbol: text,
+    liquidity: big_integer,
+    amount_a_min: big_integer,
+    amount_b_min: big_integer,
+    deadline: big_integer,
+    to_id: text
+) {
+    val caller = auth.authenticate();
+
+    require(deadline >= op_context.last_block_time / 1000, "UniswapV2: EXPIRED");
+
+    val asset_a = get_asset_by_symbol(asset_a_symbol);
+    val asset_b = get_asset_by_symbol(asset_b_symbol);
+    val to = get_account_by_pubkey(byte_array(to_id));
+
+    val current_pair = get_force_pair(asset_a, asset_b);
+
+    assets.Unsafe.transfer(caller, current_pair.treasury, current_pair.lp_asset, liquidity);
+    val (amount_0, amount_1) = burn(current_pair, to);
+
+    val (token0, _) = sort_asset(asset_a, asset_b);
+
+    var amount_a: big_integer = 0;
+    var amount_b: big_integer = 0;
+
+    if (token0 == asset_a) {
+        amount_a = amount_0;
+        amount_b = amount_1;
+    } else {
+        amount_a = amount_1;
+        amount_b = amount_0;
+    }
+
+    require(amount_0 >= amount_a_min, "UniswapV2Router: INSUFFICIENT_A_AMOUNT");
+    require(amount_1 >= amount_b_min, "UniswapV2Router: INSUFFICIENT_B_AMOUNT");
+
+    create uniswap_history_transaction (
+        .user = caller,
+        .token0 = asset_a,
+        .token1 = asset_b,
+        .amount0 = amount_a,
+        .amount1 = amount_b,
+        .amount_lp = liquidity,
+        .type = uniswap_history_type.remove_liquidity
+    );
+}
+
+operation swap_exact_tokens_for_tokens(
+    amount_in: big_integer,
+    amount_out_min: big_integer,
+    path: list<text>,
+    to: text,
+    deadline: big_integer
+) {
+    val caller = auth.authenticate();
+
+    require(deadline >= op_context.last_block_time / 1000, "UniswapV2: EXPIRED");
+
+    val amounts_response = get_amounts_out(amount_in, from_assets_symbol_to_assets(path));
+
+    require(
+        amounts_response[amounts_response
+                .size() - 1]
+            .amount_in_total >= amount_out_min,
+        "UniswapV2Router: INSUFFICIENT_OUTPUT_AMOUNT"
+    );
+
+    // transfer token_in + lp to pair
+    assets.Unsafe.transfer(
+            caller,
+            get_force_pair(
+                from_asset_symbol_to_asset(path[0]),
+                from_asset_symbol_to_asset(path[1])
+                ).treasury,
+            from_asset_symbol_to_asset(path[0]),
+            amounts_response[0].amount_in_total - amounts_response[0].amount_in_treasury_fee
+        );
+
+    if (amounts_response[0].amount_in_treasury_fee > 0) {
+        assets.Unsafe.transfer(
+                caller,
+                get_account_by_pubkey(get_lock_acc_from_uniswap_acc_treasury()),
+                from_asset_symbol_to_asset(path[0]),
+                amounts_response[0].amount_in_treasury_fee
+            );
+    }
+
+    _swap(
+        amounts_response,
+        from_assets_symbol_to_assets(path),
+        get_account_by_pubkey(byte_array(to))
+    );
+}
+
+operation swap_tokens_for_exact_tokens(
+    amount_out: big_integer,
+    amount_in_max: big_integer,
+    path: list<name>,
+    to: text,
+    deadline: big_integer
+) {
+    val caller = auth.authenticate();
+
+    require(deadline >= op_context.last_block_time / 1000, "UniswapV2: EXPIRED");
+
+    val amounts_response = get_amounts_in(amount_out, from_assets_symbol_to_assets(path));
+
+    require(amounts_response[0].amount_in_total <= amount_in_max, "UniswapV2Router: EXCESSIVE_INPUT_AMOUNT");
+
+    assets.Unsafe.transfer(
+            caller,
+            get_force_pair(
+                from_asset_symbol_to_asset(path[0]),
+                from_asset_symbol_to_asset(path[1])
+                ).treasury,
+            from_asset_symbol_to_asset(path[0]),
+            amounts_response[0].amount_in_total - amounts_response[0].amount_in_treasury_fee
+        );
+
+    if (amounts_response[0].amount_in_treasury_fee > 0) {
+        assets.Unsafe.transfer(
+                caller,
+                get_account_by_pubkey(get_lock_acc_from_uniswap_acc_treasury()),
+                from_asset_symbol_to_asset(path[0]),
+                amounts_response[0].amount_in_treasury_fee
+            );
+    }
+
+    _swap(
+        amounts_response,
+        from_assets_symbol_to_assets(path),
+        get_account_by_pubkey(byte_array(to))
+    );
+}
+
+operation set_fee_on(fee_on: boolean) {
+    admin.require_admin();
+    require(fee_on != app_meta_uniswap.fee_on, "Invalid fee_on");
+    update app_meta_uniswap ( fee_on = fee_on );
+}

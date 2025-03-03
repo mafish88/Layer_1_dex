@@ -1,0 +1,99 @@
+query get_asset_balance_credit_override(
+    account_id: byte_array,
+    asset_symbol: name,
+    current_time: big_integer
+): big_integer {
+
+    if (asset_symbol == "Credit") {
+        val credit_balance = credit_asset_override_balance @? {
+            .account.id == account_id
+        };
+
+
+        // if users have not have free credit mean that 1. credit_balance is null
+        if (_is_free_credit_for_user(account_id, get_time_begin_day(current_time * 1000)) == false) {
+            val extra_credit = app_meta_credit.daily_free_credit_amount;
+            if (credit_balance == null) {
+                return extra_credit;
+            } else {
+                return credit_balance.remaining_credit_amount + extra_credit;
+            }
+        } else {
+            if (credit_balance == null) {
+                return 0L;
+            } else {
+                return credit_balance.remaining_credit_amount + credit_balance.daily_free_amount;
+            }
+        }
+    } else {
+        val asset = get_asset_by_symbol(asset_symbol);
+        return assets.get_asset_balance(get_account_by_pubkey(account_id), asset);
+    }
+}
+
+query get_list_top_up_credit_history(search: text, page: integer, page_size: integer): list_credit_history_dto {
+    val search_trim = search.trim().upper_case();
+    val list_top_up = credit_history_record @* {
+        .credit_use == credit_action.TOP_UP,
+        if (search_trim != "") 
+            .account.id.to_hex().upper_case() == search_trim
+        else true
+    } ( @omit @sort_desc .rowid, $ );
+
+    val total_row = list_top_up.size();
+
+    val datas = list_top_up @* { } offset (
+        (page - 1) * page_size
+    ) limit page_size;
+
+    val result: list<credit_history_dto> = [];
+
+    for (data in datas) {
+        result.add(
+            credit_history_dto(
+                timestamp = data.transaction.block.timestamp,
+                amount_changed = data.amount_changed,
+                id = data.account.id,
+                created_by = data.created_by.id
+            )
+        );
+    }
+    val metadata_rs = get_metadata_list(total_row, page, page_size);
+
+    return list_credit_history_dto(data = result, metadata = metadata_rs);
+}
+
+query get_credit_amount(): credit_amount_dto {
+    return credit_amount_dto(
+        daily_free_credit_amount = app_meta_credit.daily_free_credit_amount,
+        create_pair_credit_amount = app_meta_credit.create_pair_credit_amount,
+        add_liquidity_credit_amount = app_meta_credit.add_liquidity_credit_amount,
+        remove_liquidity_credit_amount = app_meta_credit.remove_liquidity_credit_amount,
+        swap_credit_amount = app_meta_credit.swap_credit_amount,
+        set_fee_to_credit_amount = app_meta_credit.set_fee_to_credit_amount,
+        set_fee_to_setter_credit_amount = app_meta_credit.set_fee_to_setter_credit_amount,
+        stake_credit_amount = app_meta_credit.stake_credit_amount,
+        unstake_credit_amount = app_meta_credit.unstake_credit_amount,
+        farming_deposit_credit_amount = app_meta_credit.farming_deposit_credit_amount,
+        farming_withdraw_credit_amount = app_meta_credit.farming_withdraw_credit_amount,
+        farming_harvest_credit_amount = app_meta_credit.farming_harvest_credit_amount,
+        farming_emergency_withdraw_credit_amount = app_meta_credit.farming_emergency_withdraw_credit_amount,
+        init_transfer_credit_amount = app_meta_credit.init_transfer_credit_amount,
+        apply_transfer_credit_amount = app_meta_credit.apply_transfer_credit_amount,
+        complete_transfer_credit_amount = app_meta_credit.complete_transfer_credit_amount,
+        transfer_credit_amount = app_meta_credit.transfer_credit_amount,
+        register_account_credit_amount = app_meta_credit.register_account_credit_amount,
+        register_asset_credit_amount = app_meta_credit.register_asset_credit_amount,
+        create_pair_x_token_staking_credit_amount = app_meta_credit.create_pair_x_token_staking_credit_amount,
+        withdraw_fee_to_staking_credit_amount = app_meta_credit.withdraw_fee_to_staking_credit_amount,
+        create_pool_farming_credit_amount = app_meta_credit.create_pool_farming_credit_amount,
+        set_pool_alloc_point_credit_amount = app_meta_credit.set_pool_alloc_point_credit_amount,
+        update_treasury_credit_amount = app_meta_credit.update_treasury_credit_amount,
+        other_action = app_meta_credit.other_action,
+        top_up_credit_for_user_credit_amount = app_meta_credit.top_up_credit_for_user_credit_amount
+    );
+}
+
+query get_pending_credit_for_user(account_id: byte_array) {
+    return pending_credit_for_user @* { .id == account_id } ( $.to_struct() );
+}

@@ -1,0 +1,717 @@
+@test module;
+
+import contracts.*;
+import lib.ft4.test.utils. { ft_auth_operation_for };
+
+import contracts.common.*;
+import contracts.uniswap.*;
+import lib.ft4.external.accounts.strategies. { register_account };
+import lib.ft4.core.accounts.strategies.transfer.fee. { ras_transfer_fee };
+import lib.ft4.external.assets.{ transfer };
+import lib.ft4.external.admin. { mint, register_asset };
+
+val alice = rell.test.pubkeys.alice;
+val bob = rell.test.pubkeys.bob;
+val charlie = rell.test.pubkeys.charlie;
+
+val alice_kp = rell.test.keypairs.alice; 
+val bob_kp = rell.test.keypairs.bob;
+val charlie_kp = rell.test.keypairs.charlie;
+
+val admin_pub = x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06";
+val admin_kp = rell.test.keypair(
+        priv = x"DACA68A6085937879759F316D51310DFB5FB23006B1B5DFA63AE01308D17F67D",
+        pub = x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06"
+    );
+
+function deploy_token_script(asset_name: name, symbol: text, decimals: integer, icon_url: text) {
+    rell.test.tx()
+        .op(register_asset(asset_name, symbol, decimals, icon_url))
+        .sign(admin_kp)
+        .run();
+}
+
+//SECTION - Init
+function test_init_should_fail_caller_invalid() {
+    val e1 = rell.test.tx()
+        .op(init_uniswap())
+        .sign(bob_kp)
+        .run_must_fail();
+
+    assert_true(e1.message.contains("Expected admin signature"));
+}
+
+function admin_mint_for_user(user: account, asset: asset, amount: big_integer) {
+    rell.test.tx()
+        .nop()
+        .op(mint(user.id, asset.id, amount))
+        .sign(admin_kp)
+        .run();
+}
+
+function register_account_script(user_kp: rell.test.keypair) {
+    val asset = get_asset_by_symbol("CHR");
+    print("this is asset", asset);
+
+    admin_mint_for_user(
+        get_account_by_pubkey(admin_pub),
+        asset,
+        1000000000000000000000000L
+    );
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            transfer(
+                user_kp.pub.hash(),
+                asset.id,
+                1000000000000000000000000L
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    rell.test.tx()
+        .op(
+            ras_transfer_fee(
+                asset.id,
+                single_sig_auth_descriptor(user_kp.pub, set(["T"])),
+                null
+            )
+        )
+        .op(register_account())
+        .sign(user_kp)
+        .run();
+}
+
+function test_init_success() {
+    rell.test.tx()
+        .op(init_uniswap())
+        .sign(admin_kp).run();
+    deploy_token_script("Chromia", "CHR", 18, "https://url-to-asset-1-icon");
+
+    // check object dapp data
+    val get_fee_to = get_object_dapp_fee_to();
+    assert_equals(get_fee_to, admin_pub);
+
+    add_operator_for_admin(charlie);
+}
+
+function create_user() {
+    register_account_script(alice_kp);
+    register_account_script(bob_kp);
+}
+
+function test_get_user_or_create() {
+    test_init_success();
+    // register_account_script(admin_kp);
+}
+
+function add_operator_for_admin(operator: byte_array) {
+    register_account_script(charlie_kp);
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(add_operator(operator.hash().to_hex()))
+        .sign(admin_kp)
+        .run();
+}
+
+function test_set_fee_to_should_fail_caller_invalid() {
+    test_init_success();
+
+    create_user();
+
+    val e1 = rell.test.tx()
+        .op(ft_auth_operation_for(bob))
+        .op(set_fee_to(bob))
+        .sign(bob_kp)
+        .run_must_fail();
+
+    assert_true(e1.message.contains("Invalid caller"));
+}
+
+function test_set_fee_to_success() {
+    test_init_success();
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(set_fee_to(bob))
+        .sign(admin_kp)
+        .run();
+
+    val get_fee_to = get_object_dapp_fee_to();
+    assert_equals(get_fee_to, bob);
+
+    // set back to admin
+    rell.test.tx()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(set_fee_to(admin_pub))
+        .sign(admin_kp)
+        .run();
+
+    val new_get_fee_to = get_object_dapp_fee_to();
+    assert_equals(new_get_fee_to, admin_pub);
+}
+
+function test_set_fee_to_setter_should_fail_caller_invalid() {
+    test_init_success();
+
+    create_user();
+
+    val e1 = rell.test.tx()
+        .op(ft_auth_operation_for(bob))
+        .op(set_fee_to_setter(bob))
+        .sign(bob_kp)
+        .run_must_fail();
+
+    assert_true(e1.message.contains("Invalid caller"));
+}
+
+function test_set_fee_to_setter_success() {
+    test_init_success();
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(set_fee_to_setter(bob))
+        .sign(admin_kp)
+        .run();
+
+    val get_fee_to_setter = get_object_dapp_fee_to_setter();
+    assert_equals(get_fee_to_setter, bob);
+
+    // set back to admin
+    rell.test.tx()
+        .op(ft_auth_operation_for(bob))
+        .op(set_fee_to_setter(admin_pub))
+        .sign(bob_kp)
+        .run();
+
+    val new_get_fee_to_setter = get_object_dapp_fee_to_setter();
+    assert_equals(new_get_fee_to_setter, admin_pub);
+}
+
+function test_check_asset() {
+    test_init_success();
+
+    deploy_token_script("USDC", "USDC", 6, "http://icon.com");
+    deploy_token_script("BTC", "BTC", 18, "http://icon.com");
+
+    val asset_usdc = get_asset_by_symbol("USDC");
+    val asset_btc = get_asset_by_symbol("BTC");
+
+    print("usdc asset:", asset_usdc);
+    print("btc asset:", asset_btc);
+
+    val compare_to_asset_0 = compare_to_asset(asset_usdc, asset_btc);
+    val compare_to_asset_1 = compare_to_asset(asset_btc, asset_usdc);
+
+    print("compare_to_asset_0", compare_to_asset_0, "compare_to_asset_1", compare_to_asset_1);
+
+    assert_equals(compare_to_asset_0, compare_to_asset_1);
+}
+
+function test_add_pair_invalid_pair() {
+    test_init_success();
+
+    deploy_token_script("USDC", "USDC", 6, "http://icon.com");
+    deploy_token_script("BTC", "BTC", 18, "http://icon.com");
+
+    val asset_usdc = get_asset_by_symbol("USDC");
+    val asset_btc = get_asset_by_symbol("BTC");
+
+    create_user();
+
+    val e1 = rell.test.tx()
+        .op(ft_auth_operation_for(bob))
+        .op(create_pair(asset_usdc.name, asset_usdc.name))
+        .sign(bob_kp)
+        .run_must_fail();
+
+    assert_true(e1.message.contains("Invalid token pair"));
+}
+
+function test_add_pair_success() {
+    test_init_success();
+
+    deploy_token_script("USDC", "USDC", 6, "http://icon.com");
+    deploy_token_script("BTC", "BTC", 18, "http://icon.com");
+    deploy_token_script("ETH", "ETH", 18, "http://icon.com");
+    deploy_token_script("POL", "POL", 18, "http://icon.com");
+    deploy_token_script("SOLANA", "SOLANA", 18, "http://icon.com");
+
+    val asset_usdc = get_asset_by_symbol("USDC");
+    val asset_btc = get_asset_by_symbol("BTC");
+    val asset_eth = get_asset_by_symbol("ETH");
+    val asset_pol = get_asset_by_symbol("POL");
+    val asset_solana = get_asset_by_symbol("SOLANA");
+
+    create_user();
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(bob))
+        .op(create_pair(asset_usdc.name, asset_btc.name))
+        .sign(bob_kp)
+        .run();
+
+    val e1 = rell.test.tx()
+        .op(ft_auth_operation_for(bob))
+        .op(create_pair(asset_btc.name, asset_usdc.name))
+        .sign(bob_kp)
+        .run_must_fail();
+
+    assert_true(e1.message.contains("Pair already created"));
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(bob))
+        .op(create_pair(asset_usdc.name, asset_eth.name))
+        .sign(bob_kp)
+        .run();
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(bob))
+        .op(create_pair(asset_usdc.name, asset_pol.name))
+        .sign(bob_kp)
+        .run();
+
+    val get_usdc_pairs = get_all_pair(asset_usdc);
+    print("get all pair", get_usdc_pairs);
+}
+
+function add_liquidity_script(
+    asset_a: asset,
+    asset_b: asset,
+    amount_a_desired: big_integer,
+    amount_b_desired: big_integer,
+    amount_a_min: big_integer,
+    amount_b_min: big_integer,
+    deadline: big_integer,
+    to: account,
+    user_kp: rell.test.keypair,
+    user_pubkey: pubkey
+) {
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(user_pubkey))
+        .op(
+            add_liquidity(
+                asset_a.name,
+                asset_b.name,
+                amount_a_desired,
+                amount_b_desired,
+                amount_a_min,
+                amount_b_min,
+                deadline,
+                to.id.to_hex()
+            )
+        )
+        .sign(user_kp)
+        .run();
+}
+
+function remove_liquidity_script(
+    asset_a: asset,
+    asset_b: asset,
+    liquidity: big_integer,
+    amount_a_min: big_integer,
+    amount_b_min: big_integer,
+    deadline: big_integer,
+    to: account,
+    user_kp: rell.test.keypair,
+    user_pubkey: pubkey
+) {
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(user_pubkey))
+        .op(
+            remove_liquidity(
+                asset_a
+                    .name,
+                asset_b
+                    .name,
+                liquidity,
+                amount_a_min,
+                amount_b_min,
+                deadline,
+                to
+                    .id
+                    .to_hex()
+            )
+        )
+        .sign(user_kp)
+        .run();
+}
+
+function swap_exact_tokens_for_tokens_script(
+    amount_in: big_integer,
+    amount_out_min: big_integer,
+    path: list<name>,
+    to: account,
+    deadline: big_integer,
+    user_kp: rell.test.keypair,
+    user_pubkey: pubkey
+) {
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(user_pubkey))
+        .op(swap_exact_tokens_for_tokens(amount_in, amount_out_min, path, to.id.to_hex(), deadline))
+        .sign(user_kp)
+        .run();
+}
+
+function swap_tokens_for_exact_tokens_script(
+    amount_out: big_integer,
+    amount_in_max: big_integer,
+    path: list<name>,
+    to: account,
+    deadline: big_integer,
+    user_kp: rell.test.keypair,
+    user_pubkey: pubkey
+) {
+    rell.test.tx()
+        .op(ft_auth_operation_for(user_pubkey))
+        .op(swap_tokens_for_exact_tokens(amount_out, amount_in_max, path, to.id.to_hex(), deadline))
+        .sign(user_kp)
+        .run();
+}
+
+function test_add_liquidity_success() {
+    test_init_success();
+
+    deploy_token_script("USDC", "USDC", 6, "http://icon.com");
+    deploy_token_script("BTC", "BTC", 18, "http://icon.com");
+    deploy_token_script("ETH", "ETH", 18, "http://icon.com");
+    deploy_token_script("POL", "POL", 18, "http://icon.com");
+    deploy_token_script("SOLANA", "SOLANA", 18, "http://icon.com");
+
+    create_user();
+    val bob_account = get_account_by_pubkey(bob.hash());
+
+    val asset_usdc = get_asset_by_symbol("USDC");
+    val asset_btc = get_asset_by_symbol("BTC");
+
+    admin_mint_for_user(bob_account, asset_usdc, 165000000);
+    admin_mint_for_user(bob_account, asset_btc, 11000);
+
+    val data = get_token_amount_add_liquidity(bob.to_hex(), "USDC", "BTC", 65000000, 1000);
+
+    val before_user_token_usdc_balance = get_asset_balance(bob_account, asset_usdc);
+    val before_user_token_btc_balance = get_asset_balance(bob_account, asset_btc);
+
+    add_liquidity_script(asset_usdc, asset_btc, 65000000, 1000, 65000000, 1000, 100000000000, bob_account, bob_kp, bob);
+
+    val after_user_token_usdc_balance = get_asset_balance(bob_account, asset_usdc);
+    val after_user_token_btc_balance = get_asset_balance(bob_account, asset_btc);
+    assert_equals(
+        before_user_token_usdc_balance - after_user_token_usdc_balance,
+        65000000
+    );
+
+    assert_equals(
+        before_user_token_btc_balance - after_user_token_btc_balance,
+        1000
+    );
+
+    assert_equals(
+        data.after_user_lp,
+        get_asset_balance(bob_account, get_asset_by_symbol("CLP:BTC+USDC"))
+    );
+
+    assert_equals(
+        data.after_total_supply,
+        get_asset_by_symbol("CLP:BTC+USDC").total_supply
+    );
+
+    val data2 = get_token_amount_add_liquidity(bob.hash().to_hex(), "USDC", "BTC", 65000000, 0);
+    print("data2", data2);
+
+    val before_user_token_usdc_balance2 = get_asset_balance(bob_account, asset_usdc);
+    val before_user_token_btc_balance2 = get_asset_balance(bob_account, asset_btc);
+
+    add_liquidity_script(asset_usdc, asset_btc, 65000000, 1000, 65000000, 1000, 100000000000, bob_account, bob_kp, bob);
+
+    val after_user_token_usdc_balance2 = get_asset_balance(bob_account, asset_usdc);
+    val after_user_token_btc_balance2 = get_asset_balance(bob_account, asset_btc);
+
+    assert_equals(
+        before_user_token_usdc_balance2 - after_user_token_usdc_balance2,
+        65000000
+    );
+
+    assert_equals(
+        before_user_token_btc_balance2 - after_user_token_btc_balance2,
+        1000
+    );
+
+    assert_equals(
+        data2.after_user_lp,
+        get_asset_balance(bob_account, get_asset_by_symbol("CLP:BTC+USDC"))
+    );
+    // assert_equals(
+    //     data2.after_total_supply, 
+    //     get_asset_by_symbol("CLP:BTC+USDC").total_supply
+    // );
+}
+
+function test_add_liquidity_success_with_formular() {
+    test_init_success();
+
+    deploy_token_script("USDC", "USDC", 6, "http://icon.com");
+    deploy_token_script("BTC", "BTC", 18, "http://icon.com");
+
+    create_user();
+    val bob_account = get_account_by_pubkey(bob.hash());
+    val alice_account = get_account_by_pubkey(alice.hash());
+
+    val asset_usdc = get_asset_by_symbol("USDC");
+    val asset_btc = get_asset_by_symbol("BTC");
+
+    admin_mint_for_user(bob_account, asset_usdc, 10000000000000000000000000L);
+    admin_mint_for_user(bob_account, asset_btc, 10000000000000000000000000L);
+
+    admin_mint_for_user(alice_account, asset_usdc, 10000000000000000000000000L);
+    admin_mint_for_user(alice_account, asset_btc, 10000000000000000000000000L);
+
+    var data = get_token_amount_add_liquidity(bob.to_hex(), "USDC", "BTC", 20000000, 10000000000000000000L);
+    print("data before add liqudity", data);
+
+    add_liquidity_script(
+        asset_usdc,
+        asset_btc,
+        20000000L,
+        10000000000000000000L,
+        20000000L,
+        10000000000000000000L,
+        100000000000,
+        bob_account,
+        bob_kp,
+        bob
+    );
+
+    var bob_liquidity = get_asset_balance(bob_account, get_asset_by_symbol("CLP:BTC+USDC"));
+    print("bob_liquidity", bob_liquidity);
+
+    var data2 = get_token_amounts_remove_liquidity("USDC", "BTC", bob_liquidity);
+    print("data2", data2);
+
+    data = get_token_amount_add_liquidity(alice_account.id.to_hex(), "USDC", "BTC", 20000000, 10000000000000000000L);
+    print("data before add liqudity alice", data);
+
+    add_liquidity_script(
+        asset_usdc,
+        asset_btc,
+        20000000L,
+        10000000000000000000L,
+        20000000L,
+        10000000000000000000L,
+        100000000000,
+        alice_account,
+        alice_kp,
+        alice
+    );
+
+    var alice_liquidity = get_asset_balance(alice_account, get_asset_by_symbol("CLP:BTC+USDC"));
+    print("alice_liquidity", alice_liquidity);
+
+    var data3 = get_token_amounts_remove_liquidity("USDC", "BTC", alice_liquidity);
+    print("data3", data3);
+}
+
+function test_remove_liquidity_success() {
+    test_init_success();
+
+    deploy_token_script("USDC", "USDC", 6, "http://icon.com");
+    deploy_token_script("BTC", "BTC", 18, "http://icon.com");
+    deploy_token_script("ETH", "ETH", 18, "http://icon.com");
+    deploy_token_script("POL", "POL", 18, "http://icon.com");
+    deploy_token_script("SOLANA", "SOLANA", 18, "http://icon.com");
+
+    create_user();
+    val bob_account = get_account_by_pubkey(bob.hash());
+
+    val asset_usdc = get_asset_by_symbol("USDC");
+    val asset_btc = get_asset_by_symbol("BTC");
+
+    admin_mint_for_user(bob_account, asset_usdc, 65000000);
+    admin_mint_for_user(bob_account, asset_btc, 1000);
+
+    add_liquidity_script(asset_usdc, asset_btc, 65000000, 1000, 65000000, 1000, 100000000000, bob_account, bob_kp, bob);
+
+    val data = get_token_amounts_remove_liquidity_with_user(bob.hash().to_hex(), "USDC", "BTC", 1000);
+    print("data", data);
+
+    val before_user_token_usdc_balance = get_asset_balance(bob_account, asset_usdc);
+    val before_user_token_btc_balance = get_asset_balance(bob_account, asset_btc);
+
+    remove_liquidity_script(asset_usdc, asset_btc, 1000, 0, 0, 100000000000, bob_account, bob_kp, bob);
+
+    val after_user_token_usdc_balance = get_asset_balance(bob_account, asset_usdc);
+    val after_user_token_btc_balance = get_asset_balance(bob_account, asset_btc);
+
+    assert_equals(
+        data.after_user_lp,
+        get_asset_balance(bob_account, get_asset_by_symbol("CLP:BTC+USDC"))
+    );
+
+    assert_equals(
+        data.after_total_supply,
+        get_asset_by_symbol("CLP:BTC+USDC").total_supply
+    );
+
+    assert_equals(
+        data.amount_a,
+        after_user_token_usdc_balance - before_user_token_usdc_balance
+    );
+
+    assert_equals(
+        data.amount_b,
+        after_user_token_btc_balance - before_user_token_btc_balance
+    );
+}
+
+function test_remove_liquidity_with_exact_formular() {
+    test_init_success();
+
+    deploy_token_script("QN1", "QN1", 18, "http://icon.com");
+    deploy_token_script("QN2", "QN2", 18, "http://icon.com");
+
+    create_user();
+    val bob_account = get_account_by_pubkey(bob.hash());
+
+    val asset_qn1 = get_asset_by_symbol("QN1");
+    val asset_qn2 = get_asset_by_symbol("QN2");
+
+    admin_mint_for_user(bob_account, asset_qn1, 100000000000000000000000000000L);
+    admin_mint_for_user(bob_account, asset_qn2, 100000000000000000000000000000L);
+
+    add_liquidity_script(
+        asset_qn1,
+        asset_qn2,
+        100000000000000000000L,
+        200000000000000000000L,
+        100000000000000000000L,
+        200000000000000000000L,
+        100000000000,
+        bob_account,
+        bob_kp,
+        bob
+    );
+
+    val bob_liquidity = get_asset_balance(bob_account, get_asset_by_symbol("CLP:QN2+QN1"));
+    print("bob_liquidity", bob_liquidity);
+
+    print("Remove 1% of liquidity", bob_liquidity / 100, bob_liquidity);
+
+    val data = get_token_amounts_remove_liquidity_with_user(bob.hash().to_hex(), "QN1", "QN2", bob_liquidity/100);
+    print("data", data);
+
+    val before_user_token_qn1_balance = get_asset_balance(bob_account, asset_qn1);
+    val before_user_token_qn2_balance = get_asset_balance(bob_account, asset_qn2);
+
+    
+}
+
+function test_swap_exact_tokens_for_tokens_success() {
+    test_init_success();
+
+    deploy_token_script("USDC", "USDC", 6, "http://icon.com");
+    deploy_token_script("BTC", "BTC", 18, "http://icon.com");
+    deploy_token_script("ETH", "ETH", 18, "http://icon.com");
+    deploy_token_script("POL", "POL", 18, "http://icon.com");
+    deploy_token_script("SOLANA", "SOLANA", 18, "http://icon.com");
+
+    create_user();
+    val bob_account = get_account_by_pubkey(bob.hash());
+
+    val asset_usdc = get_asset_by_symbol("USDC");
+    val asset_btc = get_asset_by_symbol("BTC");
+    val asset_eth = get_asset_by_symbol("ETH");
+
+    admin_mint_for_user(bob_account, asset_usdc, 650000000000000);
+    admin_mint_for_user(bob_account, asset_btc, 100000000000);
+    admin_mint_for_user(bob_account, asset_eth, 50000000000000);
+
+    add_liquidity_script(
+        asset_usdc,
+        asset_btc,
+        650000000000,
+        10000000,
+        650000000000,
+        10000000,
+        100000000000,
+        bob_account,
+        bob_kp,
+        bob
+    );
+    add_liquidity_script(
+        asset_usdc,
+        asset_eth,
+        50000000000,
+        10000000,
+        50000000000,
+        10000000,
+        100000000000,
+        bob_account,
+        bob_kp,
+        bob
+    );
+
+    var path: list<name> = [asset_eth.name, asset_usdc.name, asset_btc.name];
+    val data = get_amounts_out(10000, from_assets_symbol_to_assets(path));
+    print("data", data);
+
+    swap_exact_tokens_for_tokens_script(10000, 0, path, bob_account, 100000000000, bob_kp, bob);
+
+    val uniswap_treasury_eth_balance = get_asset_balance(
+        get_account_by_pubkey(
+            get_lock_acc_from_uniswap_acc_treasury()
+        ),
+        asset_eth
+    );
+    assert_equals(uniswap_treasury_eth_balance, data[0].amount_in_treasury_fee);
+
+    val uniswap_treasury_usdc_balance = get_asset_balance(
+        get_account_by_pubkey(
+            get_lock_acc_from_uniswap_acc_treasury()
+        ),
+        asset_usdc
+    );
+    assert_equals(uniswap_treasury_usdc_balance, data[1].amount_in_treasury_fee);
+
+    swap_exact_tokens_for_tokens_script(2000000, 0, path, bob_account, 100000000000, bob_kp, bob);
+
+    val get_fee_data = get_fee_and_reward_in_24h(rell.test.block_interval / 1000);
+    print("get_fee_data", get_fee_data);
+}
+
+function test_swap_tokens_for_exact_tokens_success() {
+    test_init_success();
+
+    deploy_token_script("USDC", "USDC", 6, "http://icon.com");
+    deploy_token_script("BTC", "BTC", 18, "http://icon.com");
+    deploy_token_script("ETH", "ETH", 18, "http://icon.com");
+    deploy_token_script("POL", "POL", 18, "http://icon.com");
+    deploy_token_script("SOLANA", "SOLANA", 18, "http://icon.com");
+
+    create_user();
+    val bob_account = get_account_by_pubkey(bob.hash());
+
+    val asset_usdc = get_asset_by_symbol("USDC");
+    val asset_btc = get_asset_by_symbol("BTC");
+    val asset_eth = get_asset_by_symbol("ETH");
+
+    admin_mint_for_user(bob_account, asset_usdc, 165000000);
+    admin_mint_for_user(bob_account, asset_btc, 12000);
+    admin_mint_for_user(bob_account, asset_eth, 165000000);
+
+    add_liquidity_script(asset_usdc, asset_btc, 65000000, 1000, 65000000, 1000, 100000000000, bob_account, bob_kp, bob);
+    add_liquidity_script(asset_usdc, asset_eth, 5000000, 1000, 5000000, 1000, 100000000000, bob_account, bob_kp, bob);
+
+    var path: list<name> = [asset_eth.name, asset_usdc.name, asset_btc.name];
+    val data = get_amounts_in(10, from_assets_symbol_to_assets(path));
+    print("data", data);
+
+    swap_tokens_for_exact_tokens_script(10, 10000000000, path, bob_account, 100000000000, bob_kp, bob);
+}

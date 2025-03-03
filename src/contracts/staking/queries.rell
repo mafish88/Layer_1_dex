@@ -1,0 +1,239 @@
+query check_exist_staking_token(asset: asset): boolean {
+    return mapping_token_and_x_token @ { .token == asset } ( @sum 1 ) == 1;
+}
+
+query get_force_mapping_token_and_x_token(asset: asset): mapping_token_and_x_token {
+    return mapping_token_and_x_token @ { .token == asset };
+}
+
+/**
+ * Get list pool staking.<br>
+ * <br>
+ * @param user - The public key of the user as a text string.<br>
+ * @param staked_only - If true, only returns pairs where the user has staked.<br>
+ * @param page - The page number for pagination.<br>
+ * @param page_size - The number of items per page.<br>
+ * @return A list of staking pair DTOs with metadata.<br>
+ */
+query get_staking_pair(user: text, staked_only: boolean, page: integer, page_size: integer?): list_pool_staking_rs {
+
+    val user_account = try_call(get_account_by_pubkey(byte_array(user), *));
+
+    val result: list<staking_pair_dto> = [];
+    val list_token = mapping_token_and_x_token @* { } (
+        @omit @sort .token.symbol.lower_case(),
+        $
+    );
+
+    val staking_account_treasury = get_lock_acc_from_staking_acc_treasury();
+
+    for (mapping_data in list_token) {
+        val balance_user_token = if (user_account != null) get_asset_balance(user_account, mapping_data.token) else 0;
+        val balance_user_x_token = if (user_account != null) get_asset_balance(
+            user_account,
+            mapping_data
+                .x_token
+        ) else 0;
+
+        val balance_token_in_treasury = get_asset_balance(
+            get_account_by_pubkey(
+                staking_account_treasury
+            ),
+            mapping_data
+                .token
+        );
+        val balance_x_token_in_treasury = get_asset_balance(
+            get_account_by_pubkey(
+                staking_account_treasury
+            ),
+            mapping_data
+                .x_token
+        );
+
+        // Skip if staked only and user not staked
+        if (staked_only and (balance_user_x_token == 0)) continue;
+
+        result.add(
+            staking_pair_dto(
+                token_symbol = mapping_data.token.symbol,
+                token_decimals = mapping_data.token.decimals,
+                token_icon_url = mapping_data.token.icon_url,
+                x_token_symbol = mapping_data.x_token.symbol,
+                x_token_icon_url = mapping_data.x_token.icon_url,
+                balance_token = balance_user_token,
+                balance_x_token = balance_user_x_token,
+                balance_token_in_treasury = balance_token_in_treasury,
+                balance_x_token_in_treasury = balance_x_token_in_treasury,
+                total_supply_x_token = mapping_data.x_token.total_supply
+            )
+        );
+    }
+
+    val total_row = result.size();
+    val page_sizes = page_size ?: total_row;
+
+    val data = result @* { } offset (
+        (page - 1) * page_sizes
+    ) limit page_sizes;
+
+    val metadata_rs = get_metadata_list(total_row, page, page_sizes);
+
+    return list_pool_staking_rs(data = data, metadata = metadata_rs);
+}
+
+/**
+ * ONLY USING FOR CRAWL DATA
+ * Fetches and returns a list of staking pairs along with their token details, balances, and treasury balances.<br>
+ * This function interacts with `mapping_token_and_x_token` and `staking_account_treasury`<br>
+ * to aggregate data about tokens and their corresponding x-tokens.<br>
+ * 
+ * @return {list<staking_pair_dto>} List of staking pair DTOs containing token and x-token details.<br>
+ */
+query crawl_staking_pair(): list<staking_pair_dto> {
+    val list_mapping_token: list<staking_pair_dto> = [];
+    val list_token = mapping_token_and_x_token @* { };
+
+    for (mapping_data in list_token) {
+        val balance_user_token = 0;
+        val balance_user_x_token = 0;
+
+        val balance_token_in_treasury = get_asset_balance(
+            get_account_by_pubkey(
+                get_lock_acc_from_staking_acc_treasury()
+            ),
+            mapping_data
+                .token
+        );
+        val balance_x_token_in_treasury = get_asset_balance(
+            get_account_by_pubkey(
+                get_lock_acc_from_staking_acc_treasury()
+            ),
+            mapping_data
+                .x_token
+        );
+        list_mapping_token.add(
+            staking_pair_dto(
+                token_symbol = mapping_data.token.symbol,
+                token_decimals = mapping_data.token.decimals,
+                token_icon_url = mapping_data.token.icon_url,
+                x_token_symbol = mapping_data.x_token.symbol,
+                x_token_icon_url = mapping_data.x_token.icon_url,
+                balance_token = balance_user_token,
+                balance_x_token = balance_user_x_token,
+                balance_token_in_treasury = balance_token_in_treasury,
+                balance_x_token_in_treasury = balance_x_token_in_treasury,
+                total_supply_x_token = mapping_data.x_token.total_supply
+            )
+        );
+    }
+    return list_mapping_token;
+}
+
+query get_staking_pair_detail_by_symbol(user: text, symbol: text): staking_pair_dto {
+    val user_account = try_call(get_account_by_pubkey(byte_array(user), *));
+
+    val mapping_data = mapping_token_and_x_token @ { .token.symbol == symbol };
+
+    val balance_user_token = if (user_account != null) get_asset_balance(user_account, mapping_data.token) else 0;
+    val balance_user_x_token = if (user_account != null) get_asset_balance(user_account, mapping_data.x_token) else 0;
+
+    val balance_token_in_treasury = get_asset_balance(
+        get_account_by_pubkey(
+            get_lock_acc_from_staking_acc_treasury()
+        ),
+        mapping_data
+            .token
+    );
+    val balance_x_token_in_treasury = get_asset_balance(
+        get_account_by_pubkey(
+            get_lock_acc_from_staking_acc_treasury()
+        ),
+        mapping_data
+            .x_token
+    );
+
+    return staking_pair_dto(
+        token_symbol = mapping_data.token.symbol,
+        token_decimals = mapping_data.token.decimals,
+        token_icon_url = mapping_data.token.icon_url,
+        x_token_symbol = mapping_data.x_token.symbol,
+        x_token_icon_url = mapping_data.x_token.icon_url,
+        balance_token = balance_user_token,
+        balance_x_token = balance_user_x_token,
+        balance_token_in_treasury = balance_token_in_treasury,
+        balance_x_token_in_treasury = balance_x_token_in_treasury,
+        total_supply_x_token = mapping_data.x_token.total_supply
+    );
+}
+
+query get_total_staker(x_token_symbol: text) {
+    val x_token = get_asset_by_symbol(x_token_symbol);
+
+    return balance @* { .asset == x_token, .amount > 0 } ( @sum 1 )[0];
+}
+
+/**
+ * Retrieves the transactions history for staking.<br>
+ * <br>
+ * @param page - The page number for pagination.<br>
+ * @param page_size - The number of items per page.<br>
+ * @return A list of transaction history DTOs with metadata.<br>
+ */
+query get_transactions_history_staking(page: integer, page_size: integer): list_transaction_history_staking_rs {
+    // Fetch the list of transactions by joining staking history, transaction, and block
+    val list_tx = (
+        sh: staking_history,
+        tx: transaction,
+        b: block
+    ) @* {
+        sh.transaction == tx,
+        tx.block == b
+    } (
+        @omit @sort_desc b.timestamp,
+        transaction_history_dto (
+            tx_hash = tx.tx_hash.to_hex(), // Convert transaction hash to hexadecimal
+            timestamp = b.timestamp, // Timestamp of the block
+            amount_token = sh.amount_token, // Amount of token involved in the staking
+            symbol_token = sh.pair_stake.token.symbol, // Symbol of token
+            decimals_token = sh.pair_stake.token.decimals, // Decimals of token
+            amount_x_token = sh.amount_x_token, // Amount of x_token involved in the staking
+            symbol_x_token = sh.pair_stake.x_token.symbol, // Symbol of x_token
+            decimals_x_token = sh.pair_stake.x_token.decimals, // Decimals of x_token
+            staking_type = sh.staking_type
+        // Type of staking operation
+        )
+    );
+
+    // Calculate the total number of rows
+    val total_row = list_tx.size();
+
+    // Paginate the transaction data
+    val data = list_tx @* { } offset (
+        (page - 1) * page_size
+    ) limit page_size;
+
+    // Generate metadata for the response
+    val metadata_rs = get_metadata_list(total_row, page, page_size);
+
+    // Return the paginated transaction history with metadata
+    return list_transaction_history_staking_rs(data = data, metadata = metadata_rs);
+}
+
+/**
+ * Checks if the Uniswap treasury has any tokens.<br>
+ * <br>
+ * @return A boolean indicating whether the Uniswap treasury holds any tokens.<br>
+ */
+query check_uniswap_treasury_has_token(): boolean {
+    // Retrieve the account associated with the Uniswap treasury
+    val uniswap_treasury = get_account_by_pubkey(get_lock_acc_from_uniswap_acc_treasury());
+
+    // Count the number of assets in the Uniswap treasury with a positive balance
+    val count = assets.balance @ {
+            .account == uniswap_treasury,
+            .amount > 0
+        } ( @sum 1 );
+
+    // Return true if there is at least one asset with a positive balance, otherwise false
+    return count > 0;
+}

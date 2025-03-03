@@ -1,0 +1,188 @@
+import lib.ft4.core.accounts.strategies.transfer.{account_creation_transfer, account_creation_state};
+//**!SECTION - Account */
+// Account queries
+
+query get_lock_acc_from_uniswap_acc_treasury(): byte_array {
+    return get_lock_account_id(
+        accounts.Account(get_module_args().uniswap_account_treasury),
+        "FEE_UNISWAP_FOR_STAKING"
+    );
+}
+
+query get_lock_acc_from_masterchef_acc_treasury(): byte_array {
+    return get_lock_account_id(
+        accounts.Account(get_module_args().masterchef),
+        "MASTERCHEF_TREASURY"
+    );
+}
+
+query get_lock_acc_from_staking_acc_treasury(): byte_array {
+    return get_lock_account_id(
+        accounts.Account(get_module_args().staking_account_treasury),
+        "STAKING_TREASURY"
+    );
+}
+
+query check_account_exists(pubkey: pubkey) = account @? { .id == pubkey } ( @sum 1 ) == 1;
+
+query get_account_by_pubkey(pubkey: pubkey) = account @ { .id == pubkey };
+
+query get_all_account() = account @* { } ( .id, .type );
+
+// Asset queries
+query get_asset_by_symbol(symbol: text) {
+    return assets.asset @ { .symbol == symbol };
+}
+
+query find_asset_by_symbol(symbol: text) {
+    return assets.asset @? { .symbol == symbol };
+}
+
+query get_asset_balance_public_function(pubkey: pubkey, asset_symbol: name) {
+    val account = get_account_by_pubkey(pubkey);
+    val asset = get_asset_by_symbol(asset_symbol);
+    return assets.get_asset_balance(account, asset);
+}
+
+/**
+ * Retrieves a list of supported blockchain chains based on a search query.<br>
+ * The search is case-insensitive and matches any part of the blockchain RID.<br>
+ * @param search - The search text to filter blockchain chains.<br>
+ * @return A grouped list of origin blockchain RIDs that match the search criteria.
+ */
+query get_brid_supported_chains(search: text) {
+    // Trim and convert the search text to uppercase for case-insensitive comparison
+    val search_trim_upper_case = search.trim().upper_case();
+    
+    // Query the asset_origin table, filtering by the search criteria
+    return asset_origin @* {
+        if (search_trim_upper_case != "")
+            // Check if the origin_blockchain_rid contains the search text
+            .origin_blockchain_rid.to_hex().upper_case().contains(search_trim_upper_case)
+        else true
+    } ( 
+        // Group the results by origin_blockchain_rid
+        @group .origin_blockchain_rid
+    );
+}
+
+query get_asset_supported_on_chain(blockchain_rid: byte_array) {
+    return asset_origin @* { .origin_blockchain_rid == blockchain_rid } (
+        asset_data_dto (
+            asset_id = .asset.id,
+            asset_name = .asset.name,
+            asset_symbol = .asset.symbol,
+            asset_decimals = .asset.decimals,
+            asset_icon = .asset.icon_url
+        )
+    );
+}
+
+query get_operators(search: text, page: integer, page_size: integer): list_operator_dto {
+    val search_trim_upper_case = search.trim().upper_case();
+    val list_operators = operator @* {
+        if (search_trim_upper_case != "") 
+            .account.id.to_hex().upper_case() == search_trim_upper_case
+        else true
+    } ( @omit @sort_desc .rowid, $ );
+
+    val total_row = list_operators.size();
+
+    val datas = list_operators @* { } (
+        operator_dto (
+            account_id = .account.id.to_hex(),
+            status = .status,
+            role = "Operator"
+        )
+    ) offset (
+        (page - 1) * page_size
+    ) limit page_size;
+
+    val metadataRs = get_metadata_list(total_row, page, page_size);
+
+    return list_operator_dto(data = datas, metadata = metadataRs);
+}
+
+query get_operators_with_search(search: text): operator_dto? {
+    val data = operator @* { .account.id == byte_array(search) };
+    if (data.size() == 0) return null;
+
+    return operator_dto(
+        account_id = data[0].account.id.to_hex(),
+        status = data[0].status,
+        role = "OPERATOR"
+    );
+}
+
+query get_pending_transfer(recipient_id: byte_array) {
+    return account_creation_transfer @* { recipient_id, .state == account_creation_state.pending } (
+        .recipient_id,
+        asset_symbol = .asset.symbol,
+        asset_id = .asset.id,
+        .amount
+    );
+}
+
+query get_all_assets(search: text, page: integer, page_size: integer) {
+    val search_trim_upper_case = search.trim().upper_case();
+    val list_assets = assets.crosschain.asset_origin @* {
+            if (search_trim_upper_case != "")
+            ($.asset.id.to_hex().upper_case() == search_trim_upper_case or
+                ($.origin_blockchain_rid.to_hex().upper_case() == search_trim_upper_case))
+        else true
+        } (
+            @omit @sort_desc .rowid,
+            asset_register_dto (
+                asset_id = .asset.id,
+                asset_name = .asset.name,
+                asset_symbol = .asset.symbol,
+                asset_decimals = .asset.decimals,
+                asset_icon = .asset.icon_url,
+                origin_blockchain_rid = .origin_blockchain_rid
+            )
+        );
+
+    val total_row = list_assets.size();
+
+    val datas = list_assets @* { } offset (
+        (page - 1) * page_size
+    ) limit page_size;
+
+    val metadataRs = get_metadata_list(total_row, page, page_size);
+
+    return list_asset_dto(data = datas, metadata = metadataRs);
+}
+
+/**
+ * Retrieves the balance of all tokens for a given user.<br>
+ * @param user - The public key of the user as a text string.<br>
+ * @return A list of token balances, each containing: <br>
+ * - id: The asset ID. <br>
+ * - symbol: The asset symbol. <br>
+ * - amount: The amount of the asset.
+ */
+query get_list_tokens_balance_of(user: text) {
+    // Convert the user public key from text to byte_array
+    val account = get_account_by_pubkey(byte_array(user));
+
+    val list_ignore_tokens_symbol: list<text> = [];
+
+    list_ignore_tokens_symbol.add_all(
+        pair_manager @* { } (
+            .lp_asset.symbol
+        )
+    );
+
+    list_ignore_tokens_symbol.add_all(
+        mapping_token_and_x_token @* { } (
+            .x_token.symbol
+        )
+    );
+    
+    // Retrieve and return the balance of all assets associated with the account
+    return assets.balance @* { .account == account, not (.asset.symbol in list_ignore_tokens_symbol) } (
+            id = .asset.id,
+            symbol = .asset.symbol,
+            amount = .amount
+        );
+}

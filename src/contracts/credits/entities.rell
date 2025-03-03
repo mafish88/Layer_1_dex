@@ -1,0 +1,148 @@
+import lib.ft4.accounts.{ account };
+import lib.ft4.assets.{ asset, get_asset_balance };
+import contracts.common.*;
+
+import ^.{ get_module_args };
+
+object app_meta_credit {
+    mutable daily_free_credit_amount: big_integer = 1000;
+    mutable create_pair_credit_amount: big_integer = -1;
+    mutable add_liquidity_credit_amount: big_integer = -1;
+    mutable remove_liquidity_credit_amount: big_integer = -1;
+    mutable swap_credit_amount: big_integer = -1;
+    mutable set_fee_to_credit_amount: big_integer = -1;
+    mutable set_fee_to_setter_credit_amount: big_integer = -1;
+    mutable stake_credit_amount: big_integer = -1;
+    mutable unstake_credit_amount: big_integer = -1;
+    mutable farming_deposit_credit_amount: big_integer = -1;
+    mutable farming_withdraw_credit_amount: big_integer = -1;
+    mutable farming_harvest_credit_amount: big_integer = -1;
+    mutable farming_emergency_withdraw_credit_amount: big_integer = -1;
+    mutable init_transfer_credit_amount: big_integer = -2;
+    mutable apply_transfer_credit_amount: big_integer = -2;
+    mutable complete_transfer_credit_amount: big_integer = -2;
+    mutable transfer_credit_amount: big_integer = -5;
+    mutable register_account_credit_amount: big_integer = -200;
+    mutable register_asset_credit_amount: big_integer = -1;
+    mutable create_pair_x_token_staking_credit_amount: big_integer = -1;
+    mutable withdraw_fee_to_staking_credit_amount: big_integer = -1;
+    mutable create_pool_farming_credit_amount: big_integer = -1;
+    mutable set_pool_alloc_point_credit_amount: big_integer = -1;
+    mutable update_treasury_credit_amount: big_integer = -1;
+
+    mutable top_up_credit_for_user_credit_amount: big_integer = -1;
+
+    mutable other_action: big_integer = -1;
+}
+
+struct credit_amount_dto {
+    daily_free_credit_amount: big_integer;
+
+    create_pair_credit_amount: big_integer;
+    add_liquidity_credit_amount: big_integer;
+    remove_liquidity_credit_amount: big_integer;
+    swap_credit_amount: big_integer;
+
+    set_fee_to_credit_amount: big_integer;
+    set_fee_to_setter_credit_amount: big_integer;
+
+    stake_credit_amount: big_integer;
+    unstake_credit_amount: big_integer;
+
+    farming_deposit_credit_amount: big_integer;
+    farming_withdraw_credit_amount: big_integer;
+    farming_harvest_credit_amount: big_integer;
+    farming_emergency_withdraw_credit_amount: big_integer;
+
+    init_transfer_credit_amount: big_integer;
+    apply_transfer_credit_amount: big_integer;
+    complete_transfer_credit_amount: big_integer;
+
+    transfer_credit_amount: big_integer;
+
+    register_account_credit_amount: big_integer;
+    register_asset_credit_amount: big_integer;
+
+    create_pair_x_token_staking_credit_amount: big_integer;
+    withdraw_fee_to_staking_credit_amount: big_integer;
+    create_pool_farming_credit_amount: big_integer;
+    set_pool_alloc_point_credit_amount: big_integer;
+    update_treasury_credit_amount: big_integer;
+
+    top_up_credit_for_user_credit_amount: big_integer;
+
+    other_action: big_integer;
+}
+
+entity credit_asset_override_balance {
+    key account;
+    mutable remaining_credit_amount: big_integer;
+    mutable daily_free_amount: big_integer;
+}
+
+enum credit_action {
+    TOP_UP,
+    DAILY_FREE,
+    // credit_use_type,
+
+    MASTERCHEF_DEPOSIT,
+    MASTERCHEF_WITHDRAW,
+    MASTERCHEF_HARVEST,
+    MASTERCHEF_EMERGENCY_WITHDRAW,
+    STAKING_DEPOSIT,
+    STAKING_WITHDRAW,
+
+    UNISWAP_CREATE_PAIR,
+    UNISWAP_SWAP,
+    UNISWAP_ADD_LIQUIDITY,
+    UNISWAP_REMOVE_LIQUIDITY,
+    UNISWAP_SET_FEE_TO,
+    UNISWAP_SET_FEE_TO_SETTER,
+    CROSSCHAIN_INIT_TRANSFER,
+    CROSSCHAIN_APPLY_TRANSFER,
+    CROSSCHAIN_COMPLETE_TRANSFER,
+    TRANSFER_ASSET,
+    REGISTER_ACCOUNT,
+    REGISTER_ASSET,
+    CREATE_PAIR_X_TOKEN_STAKING,
+    WITHDRAW_FEE_TO_STAKING,
+    CREATE_POOL_FARMING,
+    SET_POOL_ALLOC_POINT,
+    UPDATE_TREASURY,
+
+    PENDING_CREDIT_CROSSCHAIN,
+
+    TOP_UP_CREDIT_FOR_USER,
+
+    OTHER
+}
+
+struct credit_history_dto {
+    timestamp: big_integer;
+    amount_changed: big_integer;
+    id: byte_array;
+    created_by: byte_array;
+}
+
+struct list_credit_history_dto {
+    data: list<credit_history_dto>;
+    metadata: metadata;
+}
+
+@log
+entity credit_history_record {
+    // for free credit  id = userId+timeBeginDay
+    // for top up credit id = userId+nonce
+    // for use credit id = userId+nonce+credit_use_type
+    key id: byte_array;
+    index transaction;
+    index account;
+    credit_use: credit_action;
+    amount_changed: big_integer;
+    created_by: account;
+}
+
+entity pending_credit_for_user {
+    key id: byte_array;
+    mutable amount: big_integer;
+}

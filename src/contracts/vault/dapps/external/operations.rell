@@ -1,0 +1,45 @@
+operation create_or_update_dapp(name, description: text, launch_url: text, genre: text) {
+    core.require_admin_signer();
+    dapps.create_or_update_dapp(name, description, launch_url, genre);
+}
+
+operation remove_dapp(rowid) {
+    core.require_admin_signer();
+    val dapp = dapps.Dapp(rowid);
+    dapps.remove_dapp(dapp);
+}
+
+
+operation create_dapp_media(dapp_name: text, name, url: text, type: dapps.dapp_content_type) {
+    core.require_admin_signer();
+    dapps.create_dapp_media(dapp_name, name, url, type);
+}
+
+operation remove_dapp_media(rowid) {
+    core.require_admin_signer();
+    val dapp_media = dapps.Dapp_media(rowid);
+    dapps.remove_dapp_media(dapp_media);
+}
+
+operation update_dapp_media_url(rowid, new_url: text) {
+    core.require_admin_signer();
+    val dapp_media = dapps.Dapp_media(rowid);
+    dapps.update_dapp_media_url(dapp_media, new_url);
+}
+
+operation batch_update_dapp_media_url(update_data: list<(rowid:rowid,new_url:text)>) {
+    core.require_admin_signer();
+    dapps.batch_update_dapp_media_url(update_data);
+}
+
+operation create_or_update_blockchain(dapp_name: text, brid: byte_array, name: text, role: text) {
+    core.require_admin_signer();
+    val dapp = dapps.Dapp_by_name(dapp_name);
+    dapps.create_or_update_blockchain(dapp, brid, name, role);
+}
+
+operation remove_blockchain(brid: byte_array) {
+    core.require_admin_signer();
+    val blockchain = dapps.Blockchain(brid);
+    dapps.remove_blockchain(blockchain);
+}

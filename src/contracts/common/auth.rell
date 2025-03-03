@@ -1,0 +1,91 @@
+import lib.ft4.auth;
+import contracts.uniswap.*;
+import contracts.masterchef.*;
+import contracts.staking.*;
+
+@extend(auth.auth_handler)
+function () = auth.add_auth_handler(
+    flags = []
+);
+
+// @extend(auth.auth_handler)
+// function () = auth.add_overridable_auth_handler(
+//     scope = rell.meta(top_up_credit_for_user).mount_name,
+//     flags = ["OPERATOR"],
+// );
+
+// @extend(auth.auth_handler)
+// function () = auth.add_overridable_auth_handler(
+//     scope = rell.meta(add_lp_token).mount_name,
+//     flags = ["OPERATOR"],
+
+// );
+
+// @extend(auth.auth_handler)
+// function () = auth.add_overridable_auth_handler(
+//     scope = rell.meta(set_pool_alloc_point).mount_name,
+//     flags = ["OPERATOR"],
+// );
+
+// @extend(auth.auth_handler)
+// function () = auth.add_overridable_auth_handler(
+//     scope = rell.meta(add_staking_pair).mount_name,
+//     flags = ["OPERATOR"],
+// );
+
+// @extend(auth.auth_handler)
+// function () = auth.add_overridable_auth_handler(
+//     scope = rell.meta(admin_withdraw_swap_fee).mount_name,
+//     flags = ["OPERATOR"],
+// );
+
+// @extend(auth.auth_handler)
+// function () = auth.add_overridable_auth_handler(
+//     scope = rell.meta(new_signer_treasury).mount_name,
+//     flags = ["OPERATOR"],
+// );
+
+// @extend(auth.auth_handler)
+// function () = auth.add_overridable_auth_handler(
+//     scope = rell.meta(register_asset_by_operator).mount_name,
+//     flags = ["OPERATOR"],
+// );
+
+// @extend(auth.auth_handler)
+// function () = auth.add_overridable_auth_handler(
+//     scope = rell.meta(register_crosschain_asset_by_operator).mount_name,
+//     flags = ["OPERATOR"],
+// );
+
+@extend(auth.after_authenticate)
+function (account: accounts.account, auth_descriptor: accounts.account_auth_descriptor?) {
+    if (
+        op_context.get_current_operation().name == "add_operator" or
+        op_context.get_current_operation().name == "active_operator" or 
+        op_context.get_current_operation().name == "inactive_operator" or
+        op_context.get_current_operation().name == "remove_operator"
+    ) {
+        print("operator hook do not thing");
+    } else {
+        val op_name = op_context.get_current_operation().name;
+        check_operator_rights(account, op_name);
+        user_check_function(account);
+    }
+}
+
+function check_operator_rights(account: accounts.account, op_name: text) {
+    val operator_ops = [
+        "top_up_credit_for_user",
+        "add_lp_token",
+        "set_pool_alloc_point",
+        "add_staking_pair",
+        "admin_withdraw_swap_fee",
+        "new_signer_treasury",
+        "register_asset_by_operator",
+        "register_crosschain_asset_by_operator",
+    ];
+
+    if (operator_ops.contains(op_name)) {
+        require(is_active_operator_by_account(account), "Operator only");
+    }
+}

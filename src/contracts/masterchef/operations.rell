@@ -1,0 +1,250 @@
+import contracts.common.*;
+
+operation init_masterchef() {
+    admin.require_admin();
+    val admin_account = get_or_create_account(admin.get_admin_pubkey(), false);
+    get_or_create_account(admin.get_admin_pubkey(), true);
+
+    val masterchef_acc = get_or_create_account(get_module_args().masterchef, true);
+
+    val masterchef_treasury = ensure_lock_account(
+        "MASTERCHEF_TREASURY",
+        masterchef_acc
+    );
+}
+
+// add token to pool 
+operation add_lp_token(asset_symbol: name, alloc_point: integer) {
+    val account = auth.authenticate();
+
+    //require deployed token
+    val asset = find_asset_by_symbol(asset_symbol);
+    
+    // Check if the asset already exists
+    require(asset, "token invalid");
+
+    val last_reward = op_context.last_block_time / 1000;
+
+    mass_update_pool();
+
+    create pool_info ( id = asset.id, asset = asset, alloc_point = alloc_point, last_reward = last_reward );
+
+    //update total_alloc_point in masterchef
+    update app_meta_masterchef ( total_alloc_point  += alloc_point );
+
+    create pool_info_updated_history (
+        pool_info = pool_info @ { .id == asset.id },
+        start_time = last_reward,
+        alloc_point = alloc_point,
+        total_alloc_point = app_meta_masterchef.total_alloc_point,
+        reward_per_sec_total_pools = app_meta_masterchef.reward_per_sec
+    );
+}
+
+// Update the given pool's Reward allocation point. Can only be called by the owner.
+operation set_pool_alloc_point(asset_symbol: name, alloc_point: integer) {
+    val account = auth.authenticate();
+
+    val asset = get_asset_by_symbol(asset_symbol);
+    require_pool_info(asset);
+    val pool = pool_info @ { .id == asset.id };
+    mass_update_pool();
+    update app_meta_masterchef ( total_alloc_point = .total_alloc_point - pool.alloc_point +  alloc_point );
+    update pool ( alloc_point = alloc_point );
+
+    create pool_info_updated_history (
+        pool_info = pool,
+        start_time = op_context.last_block_time / 1000,
+        alloc_point = alloc_point,
+        total_alloc_point = app_meta_masterchef.total_alloc_point,
+        reward_per_sec_total_pools = app_meta_masterchef.reward_per_sec
+    );
+}
+
+//deposit and claim reward
+operation deposit(asset_symbol: name, amount: big_integer) {
+    val account = auth.authenticate();
+  
+    //require lp token minted
+    val asset = get_asset_by_symbol(asset_symbol);
+    val asset_id = asset.id;
+    require_pool_info(asset);
+
+    require(amount <= assets.get_asset_balance(account, asset), "wallet balance not enough to deposit");
+
+    update_pool(asset_id);
+    val pool = get_pool_info(asset_id);
+    
+    //effects
+
+    val user_amount = get_pool_info_balance(account.id, asset_id);
+    val reward_debt = get_reward_debt(account.id, asset_id);
+    if (user_amount > 0) {
+        val pending = user_amount * pool
+            .acc_reward_per_share / app_meta_masterchef
+            .acc_reward_per_share_decimal - reward_debt; 
+        //transfer reward
+        if (pending > 0) safe_reward_transfer(account, pool, pending);
+    }
+
+    assets.Unsafe.transfer(account, get_account_by_pubkey(get_lock_acc_from_masterchef_acc_treasury()), asset, amount);
+    // log stake hisotry
+    create stake_history_entry (
+        .user = account,
+        .pool_info = pool,
+        .amount = amount,
+        .op_index = op_context.op_index,
+        .is_deposit = true
+    );
+
+    increase_pool_info_balance(account, pool, amount);
+
+    val pool_info_balance_data = token_balance_debt(account, pool);
+    if (pool_info_balance_data != null) {
+        update pool_info_balance_data (
+            reward_debt = pool_info_balance_data.amount * pool.acc_reward_per_share/app_meta_masterchef.acc_reward_per_share_decimal
+        );
+    }
+    update pool ( total_supply += amount );
+}
+
+//withdraw and claim reward
+operation withdraw(asset_symbol: name, amount: big_integer) {
+    val account = auth.authenticate();
+
+    val asset = get_asset_by_symbol(asset_symbol);
+    val asset_id = asset.id;
+    require_pool_info(asset);
+
+    update_pool(asset_id);
+    val pool = get_pool_info(asset_id);
+    
+    //effects
+    val user_amount = get_pool_info_balance(account.id, asset_id);
+    val reward_debt = get_reward_debt(account.id, asset_id);
+
+    require(amount <= user_amount, " withdraw amount exceed balance");
+    if (user_amount > 0) {
+        val pending = user_amount * pool
+            .acc_reward_per_share / app_meta_masterchef
+            .acc_reward_per_share_decimal - reward_debt; 
+        //transfer reward
+        if (pending > 0) {
+            safe_reward_transfer(account, pool, pending);
+        }
+    } 
+    
+    //transfer từ masterChef về wallet user
+    assets.Unsafe.transfer(get_account_by_pubkey(get_lock_acc_from_masterchef_acc_treasury()), account, asset, amount);
+
+    //log stake history
+    create stake_history_entry (
+        .user = account,
+        .pool_info = pool,
+        .amount = amount,
+        .op_index = op_context.op_index,
+        .is_deposit = false
+    );
+
+    deduct_pool_info_balance(account, pool, amount);
+
+    val lp_token_balance_data = token_balance_debt(account, pool);
+    if (lp_token_balance_data != null) {
+        update lp_token_balance_data (
+            reward_debt = lp_token_balance_data.amount * pool.acc_reward_per_share/app_meta_masterchef.acc_reward_per_share_decimal
+        );
+    }
+    update pool ( total_supply -= amount );
+}
+
+//harvest -> claim reward
+operation harvest(asset_symbol: name) {
+    val account = auth.authenticate();
+
+    val asset = get_asset_by_symbol(asset_symbol);
+    val asset_id = asset.id;
+
+    require_pool_info(asset);
+
+    update_pool(asset_id);
+    val user_amount = get_pool_info_balance(account.id, asset_id);
+    val reward_debt = get_reward_debt(account.id, asset_id);
+    val pool = get_pool_info(asset_id);
+    val acc_reward = user_amount * pool.acc_reward_per_share / app_meta_masterchef.acc_reward_per_share_decimal;
+    val pending = acc_reward - reward_debt;
+
+    val lp_token_balance_data = token_balance_debt(account, pool);
+    if (lp_token_balance_data != null) {
+        update lp_token_balance_data ( reward_debt = acc_reward );
+    }
+
+    if (pending != 0) safe_reward_transfer(account, pool, pending);
+}
+
+//Withdraw without caring about rewards. EMERGENCY ONLY.
+operation emergency_withdraw(asset_symbol: name) {
+    val account = auth.authenticate();
+
+    val asset = get_asset_by_symbol(asset_symbol);
+    require_pool_info(asset);
+
+    val pool = pool_info @ { .id == asset.id };
+    var user_info = pool_info_balance @? { .user == account, .pool_info == pool };
+    require(not empty(user_info), "user does not exist");
+
+    user_info = pool_info_balance @ { .user == account, .pool_info == pool };
+    assets.Unsafe.transfer(get_account_by_pubkey(get_lock_acc_from_masterchef_acc_treasury()), account, pool.asset, user_info.amount);
+    update user_info ( amount = 0 );
+    update user_info ( reward_debt = 0 );
+}
+
+function safe_reward_transfer(account: account, pool: pool_info, pending: big_integer) {
+
+    val reward = get_reward_token_farming();
+    //transfer reward from masterChef to user
+    val reward_balance = assets.get_asset_balance(get_account_by_pubkey(get_lock_acc_from_masterchef_acc_treasury()), reward);
+    val amount = if (reward_balance > pending) pending else reward_balance;
+
+    assets.Unsafe.transfer(get_account_by_pubkey(get_lock_acc_from_masterchef_acc_treasury()), account, reward, amount);
+
+    //log harvest history
+    create harvest_history_entry (
+        user = account,
+        amount = amount,
+        pool_info = pool,
+        .op_index = op_context.op_index
+    );
+}
+
+// Update reward vairables for all pools. Be careful of gas spending!
+function mass_update_pool() {
+    for (pool in  pool_info @* {}) {
+        update_pool(pool.id);
+    }
+}
+
+function update_pool(asset_id: byte_array) {
+    val pool = pool_info @ { .id == asset_id };
+    print("update pool\n");
+    // update only if now > last time we updated rewards
+    val lp_supply = pool_info @ { .id == asset_id } ( .total_supply );
+    if (op_context.last_block_time / 1000 > pool.last_reward) {
+
+        print("total lp_supply: ", lp_supply);
+        if (lp_supply > 0) {
+            // last_block_time -> Returns the timestamp of the last block in milliseconds.
+            val elapsed_time_second: big_integer = (op_context.last_block_time/1000 - pool.last_reward);
+            print("elapsed time", elapsed_time_second);
+            val reward_calculated: big_integer = elapsed_time_second * app_meta_masterchef
+                .reward_per_sec * pool
+                .alloc_point / app_meta_masterchef
+                .total_alloc_point;
+
+            update pool (
+                acc_reward_per_share += reward_calculated * app_meta_masterchef.acc_reward_per_share_decimal /lp_supply
+            );
+            print("acc_reward_per_share ", pool.acc_reward_per_share);
+        }
+        update pool ( last_reward = op_context.last_block_time/1000 );
+    }
+}

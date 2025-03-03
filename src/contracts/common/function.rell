@@ -1,0 +1,138 @@
+import lib.ft4.accounts.{ create_account_with_auth, single_sig_auth_descriptor};
+
+import contracts.credits.*;
+
+@extend(assets.after_mint)
+function(accounts.account, asset, amount: big_integer) {
+    val is_lp_asset = pair_manager @? { .lp_asset == asset };
+    val is_x_token = mapping_token_and_x_token @? { .x_token == asset };
+    if (is_lp_asset == null and is_x_token == null) {
+        // check is mint
+        val get_config_is_access_mint = get_module_args().is_access_mint;
+        if (get_config_is_access_mint == false) {
+            val is_minted = is_minted_asset @? { 
+                .asset == asset
+            };
+            require(is_minted == null, "Already minted");
+
+            create is_minted_asset(asset, true);
+        }
+    }
+    
+
+
+}
+//**!SECTION - Account */
+function admin_account() = get_account_by_pubkey(admin.get_admin_pubkey().hash());
+
+function _account(id: byte_array) {
+    return accounts.account @ { id };
+}
+
+// Asset queries
+function get_or_create_account(pubkey: byte_array, using_pubkey: boolean): account {
+    val account_finding = account @? { .id == pubkey };
+
+    if (account_finding != null) {
+        return account_finding;
+    } else if (using_pubkey == true) {
+        val new_account = create_account_with_auth(single_sig_auth_descriptor(pubkey, set(["T"])), pubkey);
+        return new_account;
+    } else {
+        val new_account = create_account_with_auth(single_sig_auth_descriptor(pubkey, set(["T"])));
+        return new_account;
+    }
+}
+
+function get_asset_id(asset_name: name)=  (asset_name, chain_context.blockchain_rid).hash();
+
+function get_asset(asset_name: name) {
+    //require deployed token
+    val asset_id = get_asset_id(asset_name);
+    return assets.asset @ { .id == asset_id };
+}
+
+function from_assets_name_to_assets(assets_name: list<name>): list<asset> {
+    val assets: list<asset> = [];
+    for (asset_name in assets_name) {
+        val asset_id = get_asset_id(asset_name);
+        val asset_finding = asset @? { .id == asset_id };
+        if (asset_finding != null) {
+            assets.add(asset_finding);
+        } else {
+            
+        }
+    }
+
+    return assets;
+}
+
+function from_assets_symbol_to_assets(assets_symbol: list<text>): list<asset> {
+    val assets: list<asset> = [];
+    for (asset_symbol in assets_symbol) {
+        val asset_finding = asset @? { .symbol == asset_symbol };
+        if (asset_finding != null) {
+            assets.add(asset_finding);
+        } else {
+            
+        }
+    }
+
+    return assets;
+}
+
+function from_asset_symbol_to_asset(asset_symbol: text): asset {
+    val asset_finding = asset @ { .symbol == asset_symbol };
+    return asset_finding;
+}
+
+function from_asset_name_to_asset(asset_name: name): asset {
+    val asset_id = get_asset_id(asset_name);
+    val asset_finding = asset @ { .id == asset_id };
+    return asset_finding;
+}
+
+function get_time_begin_day(anytime_milliseconds_in_day: big_integer): big_integer {
+    val num_day = anytime_milliseconds_in_day / 86400000L;
+    return num_day * 86400;
+}
+
+function user_check_function(account: account) {
+    _resolver_credit(account.id, op_context.get_current_operation().name);
+}
+
+function get_metadata_list(total: integer, page: integer, page_size: integer): metadata {
+    val total_page = (decimal(total) / decimal(page_size)).ceil().to_integer();
+    return metadata(
+        total_page = total_page,
+        page = page,
+        page_size = page_size,
+        total = total
+    );
+}
+
+function is_valid_account_id(account_id: text): boolean {
+    val account_id_byte = try_call(byte_array.from_hex(account_id, *));
+    if (account_id_byte == null) {
+        return false;
+    }
+    return account @? { .id == account_id_byte } != null;
+}
+
+function is_active_operator_by_account_id(account_id: text): boolean {
+    val account = get_account_by_pubkey(byte_array(account_id));
+
+    // account must not exist in operator table
+    return is_active_operator_by_account(account);
+}
+
+function is_active_operator_by_account(account: account): boolean {
+    // account must not exist in operator table
+    val operator_finding = operator @? { .account == account };
+
+    if (operator_finding == null) {
+        return false;
+    }
+
+    return operator_finding.status;
+}

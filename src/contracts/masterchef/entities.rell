@@ -1,0 +1,85 @@
+import lib.ft4.accounts.{ account };
+import lib.ft4.assets.{ asset, get_asset_balance };
+
+import ^.{ get_module_args };
+
+import contracts.common.*;
+import contracts.uniswap.*;
+
+object app_meta_masterchef {
+    reward_per_sec: integer = 10000000000000000;
+    start_time_stamp: integer = 0;
+    mutable total_alloc_point: integer = 0;
+    acc_reward_per_share_decimal: big_integer = 1000000000000; // 10*12
+}
+
+entity pool_info {
+    key id: byte_array;
+    key asset;
+    mutable alloc_point: integer;// How many allocation points assigned to this pool. Rewards to distribute per block.
+    mutable last_reward: timestamp; // Last block number that Rewards distribution occurs.
+    mutable acc_reward_per_share: big_integer = 0;   // Accumulated Rewards per share, times 1e12. See below.
+    mutable total_supply: big_integer = 0;
+}
+
+entity pool_info_balance {
+    key user: account, pool_info;
+    mutable amount: big_integer;
+    mutable reward_debt: big_integer = 0;
+}
+
+@log
+entity pool_info_updated_history {
+    index pool_info;
+    start_time: timestamp;
+    alloc_point: integer;
+    total_alloc_point: integer;
+    reward_per_sec_total_pools: integer;
+}
+
+struct lp_pool_info {
+    lp_asset: asset;
+    lp_asset_name: text;
+    lp_asset_symbol: text;
+    lp_asset_decimals: integer;
+    asset0_symbol: text;
+    asset1_symbol: text;
+    APR: decimal;
+    total_staked_liquidity: big_integer;
+    total_reward_per_year: big_integer;
+    staked_liquidity: big_integer;
+    reward_per_day: big_integer;
+    user_staked_amount: big_integer;
+    last_update_time: big_integer;
+    acc_reward_per_share: big_integer;
+    reward_debt: big_integer;
+    alloc_point: integer;
+    rowid: rowid;
+}
+
+enum farming_history_type {
+    stake,
+    unstake,
+    claim_reward
+}
+
+struct asset_farming_dto {
+    asset0_symbol: text;
+    asset0_icon: text;
+    asset1_symbol: text;
+    asset1_icon: text;
+}
+
+struct tx_history_farming_dto {
+    tx_hash: text;
+    timestamp: timestamp;
+    asset_info: asset_farming_dto?;
+    lp_decimals: integer;
+    amount_token: big_integer;
+    farming_type: farming_history_type;
+}
+
+struct list_transaction_history_farming_rs {
+    data: list<tx_history_farming_dto>;
+    metadata: metadata;
+}

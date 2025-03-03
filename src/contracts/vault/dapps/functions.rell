@@ -1,0 +1,164 @@
+function Dapp(rowid) = require(
+    dapp @? { rowid },
+    "Dapp not found"
+);
+
+function Dapp_by_name(name) = require(
+    dapp @? { name },
+    "Dapp not found"
+);
+
+function Dapp_media(rowid) = require(
+    dapp_media @? { rowid },
+    "Dapp media with rowid '%s' not found".format(rowid)
+);
+
+function Blockchain(brid: byte_array) = require(
+    blockchain @? { brid },
+    "Blockchain with brid '%s' not found!".format(brid)
+);
+
+function create_or_update_dapp(name, description: text, launch_url: text, genre: text) {
+    core.validate_string_length(description, "Dapp description", 1000);
+    core.validate_url(launch_url);
+    core.validate_url(launch_url);
+    core.validate_string_length(genre, "Dapp genre", 100);
+    val dapp = dapp @? { name };
+    if (empty(dapp)) {
+        create dapp ( name, description, launch_url, genre );
+    } else update dapp ( description, launch_url, genre );
+}
+
+function find_dapp_media_in_dapp(dapp) =
+    dapp_media @* { dapp };
+
+function find_blockchains_for_dapp(dapp) =
+    blockchain @* { dapp };
+
+function delete_dapp_media_in_dapp(dapp_media_list: list<dapp_media>) {
+    for (media in dapp_media_list) {
+        delete media;
+    }
+}
+
+function delete_blockchains(blockchain_list: list<blockchain>) {
+    for (blockchain in blockchain_list) {
+        delete blockchain;
+    }
+}
+
+function remove_dapp(dapp) {
+    val dapp_media_in_dapp = find_dapp_media_in_dapp(dapp);
+    delete_dapp_media_in_dapp(dapp_media_in_dapp);
+
+    val blockchains_for_dapp = find_blockchains_for_dapp(dapp);
+    delete_blockchains(blockchains_for_dapp);
+
+    delete dapp;
+}
+
+function create_dapp_media(dapp_name: text, name, url: text, type: dapp_content_type) {
+    val dapp = Dapp_by_name(dapp_name);
+    core.validate_url(url);
+    core.validate_string_length(name, "Dapp media name", 100);
+
+    create dapp_media ( dapp, name, url, type );
+}
+
+function update_dapp_media_url(dapp_media, new_url: text) {
+    core.validate_url(new_url);
+
+    update dapp_media (
+        .url = new_url
+    );
+}
+
+function batch_update_dapp_media_url(update_data: list<(rowid:rowid,new_url:text)>) {
+    for (ud in update_data) {
+        val dapp_media = Dapp_media(ud.rowid);
+        update_dapp_media_url(dapp_media, ud.new_url);
+    }
+}
+
+function remove_dapp_media(dapp_media) {
+    delete dapp_media;
+}
+
+function create_or_update_blockchain(dapp, brid: byte_array, name: text, role: text) {
+    core.validate_string_length(name, "Blockchain name", 100);
+    core.validate_string_length(role, "Blockchain role", 100);
+    val blockchain = blockchain @? { brid };
+    if (empty(blockchain)) {
+        create blockchain ( dapp, brid, name, role );
+    } else update blockchain ( name, role );
+}
+
+
+function remove_blockchain(blockchain) {
+    delete blockchain;
+}
+
+function map_dapp_details(dapp, requested_content_types: list<dapp_content_type> ?= null) {
+    val blockchains = find_and_map_dapp_blockchains(dapp);
+    val dapp_media = if (not empty(requested_content_types)) find_and_map_dapp_media(
+        dapp,
+        requested_content_types
+    ) else null;
+
+    return (
+        rowid = dapp.rowid,
+        name = dapp.name,
+        description = dapp.description,
+        launch_url = dapp.launch_url,
+        genre = dapp.genre,
+        chain_list = blockchains,
+        content = dapp_media
+    )
+        .to_gtv_pretty();
+}
+
+function map_dapp(dapp, requested_content_types: list<dapp_content_type> ?= null) {
+    val dapp_media = if (not empty(requested_content_types)) find_and_map_dapp_media(
+        dapp,
+        requested_content_types
+    ) else null;
+    val blockchains = find_and_map_dapp_blockchains(dapp);
+
+    return (
+        rowid = dapp.rowid,
+        name = dapp.name,
+        description = dapp.description,
+        chain_list = blockchains,
+        content = dapp_media
+    )
+        .to_gtv_pretty();
+}
+
+function find_and_map_dapp_blockchains(dapp) =
+    blockchain @* { dapp } (
+    @omit @sort .rowid,
+    name = .name,
+    brid = .brid,
+    role = .role
+);
+
+function find_and_map_dapp_media(dapp, requested_content_types: list<dapp_content_type>) =
+    dapp_media @* {
+    .type in requested_content_types
+} (
+    @omit @sort .rowid,
+    name = .name,
+    url = .url,
+    type = .type
+);
+
+function find_and_map_dapp_media_for_type(dapp, requested_content_type: dapp_content_type) = 
+     dapp_media @* {
+    dapp,
+    .type == requested_content_type
+} (
+    @omit @sort .rowid,
+    name = .name,
+    url = .url,
+    type = .type
+);

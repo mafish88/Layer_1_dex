@@ -1,0 +1,529 @@
+@test module;
+
+import lib.ft4.test.utils. { ft_auth_operation_for };
+import lib.ft4.external.assets.{ get_asset_balance} ;
+import lib.ft4.external.accounts. {get_account_auth_descriptors, add_auth_descriptor, get_accounts_by_signer, get_account_by_id};
+
+import lib.ft4.external.accounts.strategies. { register_account };
+import lib.ft4.core.accounts.strategies.transfer.fee. { ras_transfer_fee };
+import lib.ft4.external.assets.{ transfer };
+import lib.ft4.external.admin. { mint, register_asset };
+
+
+import contracts.common.*;
+
+val alice = rell.test.pubkeys.alice;
+val bob = rell.test.pubkeys.bob;
+val alice_kp = rell.test.keypairs.alice; 
+val bob_kp = rell.test.keypairs.bob;
+val admin_pub = x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06";
+val admin_kp = rell.test.keypair(
+        priv = x"DACA68A6085937879759F316D51310DFB5FB23006B1B5DFA63AE01308D17F67D",
+        pub = x"02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06"
+    );
+
+function deploy_token_script(asset_name: name, symbol: text, decimals: integer, icon_url: text) {
+    rell.test.tx()
+        .op(register_asset(asset_name, symbol, decimals, icon_url))
+        .sign(admin_kp)
+        .run();  
+}
+
+function admin_mint_for_user(user: account, asset: asset, amount: big_integer) {
+    rell.test.tx()
+        .nop()
+        .op(mint(user.id, asset.id, amount))
+        .sign(admin_kp)
+        .run();
+}
+
+function register_account_script(user_kp: rell.test.keypair) {
+    val asset = get_asset_by_symbol("CHR");
+    print("this is asset", asset);
+
+    admin_mint_for_user(
+        get_account_by_pubkey(admin_pub),
+        asset,
+        1000000000000000000000000L
+    );
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            transfer(
+                user_kp.pub.hash(),
+                asset.id,
+                1000000000000000000000000L
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    rell.test.tx()
+        .op(
+            ras_transfer_fee(
+                asset.id,
+                single_sig_auth_descriptor(user_kp.pub, set(["T"])),
+                null
+            )
+        )
+        .op(register_account())
+        .sign(user_kp)
+        .run();
+}
+
+function create_account() {
+
+    rell.test.tx()
+        .op(init_staking())
+        .sign(admin_kp)
+        .run(); 
+
+    deploy_token_script("Chromia", "CHR", 18, "https://url-to-asset-1-icon");
+
+    
+    // register_account_script(alice_kp);
+    // register_account_script(bob_kp);
+    register_account_script(admin_kp);
+}
+
+function test_register_account() {
+    create_account();
+
+    val asset = get_asset_by_symbol("CHR");
+    print("this is asset", asset);
+    
+    admin_mint_for_user(
+        get_account_by_pubkey(admin_pub),
+        asset,
+        1000000000000000000000000L
+    );
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            transfer(
+                alice.hash(),
+                asset.id,
+                1000000000000000000000000L
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    // val e1 = rell.test.tx()
+    //     .op(
+    //         ras_transfer_fee(
+    //             asset.id,
+    //             single_sig_auth_descriptor(alice, set(["A", "T", "OPERATOR"])),
+    //             null
+    //         )
+    //     )
+    //     .op(register_account())
+    //     .sign(alice_kp)
+    //     .run_must_fail();
+
+    // user can register with any flags
+    rell.test.tx()
+        .op(
+            ras_transfer_fee(
+                asset.id,
+                single_sig_auth_descriptor(alice, set(["A", "T", "OPERATOR"])),
+                null
+            )
+        )
+        .op(register_account())
+        .sign(alice_kp)
+        .run();
+}
+
+function test_add_auth_descriptor() {
+    create_account();
+    val asset = get_asset_by_symbol("CHR");
+    print("this is asset", asset);
+
+    admin_mint_for_user(
+        get_account_by_pubkey(admin_pub),
+        asset,
+        1000000000000000000000000L
+    );
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            transfer(
+                alice.hash(),
+                asset.id,
+                1000000000000000000000000L
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    rell.test.tx()
+        .op(
+            ras_transfer_fee(
+                asset.id,
+                single_sig_auth_descriptor(alice, set(["A", "T"])),
+                null
+            )
+        )
+        .op(register_account())
+        .sign(alice_kp)
+        .run();
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(alice))
+        .op(
+            add_auth_descriptor(
+                single_sig_auth_descriptor(alice, set(["OPERATOR"]))
+            )
+        )
+        .sign(alice_kp)
+        .run();
+        // .run_must_fail();
+
+    val is_exist = check_account_exists(alice.hash());
+    print(is_exist);
+
+    val auth_desc = get_account_auth_descriptors(
+        alice.hash()
+    );
+
+    print("auth_desc", auth_desc);
+}
+
+function test_add_operator() {
+    create_account();
+
+    val asset = get_asset_by_symbol("CHR");
+    print("this is asset", asset);
+
+    admin_mint_for_user(
+        get_account_by_pubkey(admin_pub),
+        asset,
+        1000000000000000000000000L
+    );
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            transfer(
+                alice.hash(),
+                asset.id,
+                1000000000000000000000000L
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    rell.test.tx()
+        .op(
+            ras_transfer_fee(
+                asset.id,
+                single_sig_auth_descriptor(alice, set(["T"])),
+                null
+            )
+        )
+        .op(register_account())
+        .sign(alice_kp)
+        .run();
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            add_operator(
+                alice.hash().to_hex()
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    val is_exist = check_account_exists(alice.hash());
+    print(is_exist);
+
+    val auth_desc = get_account_auth_descriptors(
+        alice.hash()
+    );
+
+    print("auth_desc", auth_desc);
+
+    // search op
+    val operator = get_operators_with_search(alice.hash().to_hex());
+    assert_not_null(operator);
+    assert_equals(operator.account_id , alice.hash().to_hex());
+    assert_equals(operator.role , "OPERATOR");
+    assert_equals(operator.status , true);
+
+}
+
+function test_add_operator_twice() {
+    create_account();
+
+    val asset = get_asset_by_symbol("CHR");
+    print("this is asset", asset);
+
+    admin_mint_for_user(
+        get_account_by_pubkey(admin_pub),
+        asset,
+        1000000000000000000000000L
+    );
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            transfer(
+                alice.hash(),
+                asset.id,
+                1000000000000000000000000L
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    rell.test.tx()
+        .op(
+            ras_transfer_fee(
+                asset.id,
+                single_sig_auth_descriptor(alice, set(["T"])),
+                null
+            )
+        )
+        .op(register_account())
+        .sign(alice_kp)
+        .run();
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            add_operator(
+                alice.hash().to_hex()
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    val e1 = rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            add_operator(
+                alice.hash().to_hex()
+            )
+        )
+        .sign(admin_kp)
+        .run_must_fail();
+
+    assert_true(e1.message.contains("Account already in operator"));
+}
+
+function test_remove_operator() {
+    create_account();
+
+    val asset = get_asset_by_symbol("CHR");
+    print("this is asset", asset);
+
+    admin_mint_for_user(
+        get_account_by_pubkey(admin_pub),
+        asset,
+        1000000000000000000000000L
+    );
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            transfer(
+                alice.hash(),
+                asset.id,
+                1000000000000000000000000L
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    rell.test.tx()
+        .op(
+            ras_transfer_fee(
+                asset.id,
+                single_sig_auth_descriptor(alice, set(["T"])),
+                null
+            )
+        )
+        .op(register_account())
+        .sign(alice_kp)
+        .run();
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            add_operator(
+                alice.hash().to_hex()
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    val is_exist = check_account_exists(alice.hash());
+    print(is_exist);
+
+    val auth_desc = get_account_auth_descriptors(
+        alice.hash()
+    );
+
+    val operator = get_operators_with_search(alice.hash().to_hex());
+    assert_not_null(operator);
+    assert_equals(operator.account_id , alice.hash().to_hex());
+    assert_equals(operator.role , "OPERATOR");
+    assert_equals(operator.status , true);
+
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            remove_operator(
+                alice.hash().to_hex()
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    print("auth_desc", auth_desc);
+
+    // search op
+    val operatorAfter = get_operators_with_search(alice.hash().to_hex());
+    assert_null(operatorAfter);
+}
+
+function test_active_operator_activated_operator() {
+    create_account();
+
+    val asset = get_asset_by_symbol("CHR");
+    print("this is asset", asset);
+
+    admin_mint_for_user(
+        get_account_by_pubkey(admin_pub),
+        asset,
+        1000000000000000000000000L
+    );
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            transfer(
+                alice.hash(),
+                asset.id,
+                1000000000000000000000000L
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    rell.test.tx()
+        .op(
+            ras_transfer_fee(
+                asset.id,
+                single_sig_auth_descriptor(alice, set(["T"])),
+                null
+            )
+        )
+        .op(register_account())
+        .sign(alice_kp)
+        .run();
+
+    rell.test.tx()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            add_operator(
+                alice.hash().to_hex()
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    val is_exist = check_account_exists(alice.hash());
+    print(is_exist);
+
+    val auth_desc = get_account_auth_descriptors(
+        alice.hash()
+    );
+
+    val operator = get_operators_with_search(alice.hash().to_hex());
+    assert_not_null(operator);
+    assert_equals(operator.account_id , alice.hash().to_hex());
+    assert_equals(operator.role , "OPERATOR");
+    assert_equals(operator.status , true);
+
+
+    val err = rell.test.tx()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            active_operator(
+                alice.hash().to_hex()
+            )
+        )
+        .sign(admin_kp)
+        .run_must_fail();
+
+    assert_true(err.message.contains("Account not in operator"));
+}
+
+function test_active_operator_not_operator() {
+    create_account();
+
+    val asset = get_asset_by_symbol("CHR");
+    print("this is asset", asset);
+
+    admin_mint_for_user(
+        get_account_by_pubkey(admin_pub),
+        asset,
+        1000000000000000000000000L
+    );
+
+    rell.test.tx()
+        .nop()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            transfer(
+                alice.hash(),
+                asset.id,
+                1000000000000000000000000L
+            )
+        )
+        .sign(admin_kp)
+        .run();
+
+    rell.test.tx()
+        .op(
+            ras_transfer_fee(
+                asset.id,
+                single_sig_auth_descriptor(alice, set(["T"])),
+                null
+            )
+        )
+        .op(register_account())
+        .sign(alice_kp)
+        .run();
+
+    val operator = get_operators_with_search(alice.hash().to_hex());
+    assert_null(operator);
+
+    val err = rell.test.tx()
+        .op(ft_auth_operation_for(admin_pub))
+        .op(
+            active_operator(
+                alice.hash().to_hex()
+            )
+        )
+        .sign(admin_kp)
+        .run_must_fail();
+
+    assert_true(err.message.contains("Account not in operator"));
+}

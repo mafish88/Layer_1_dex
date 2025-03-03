@@ -1,0 +1,813 @@
+
+//**NOTE - Get object data */
+query get_object_dapp_fee_to(): pubkey = app_meta_uniswap.fee_to;
+
+query get_object_dapp_fee_to_setter(): pubkey = app_meta_uniswap.fee_to_setter;
+
+query get_object_dapp_Q112(): big_integer = app_meta_uniswap.Q112;
+
+query compare_to_asset(asset0: asset, asset1: asset): asset {
+    if (asset0.id < asset1.id) return asset0;
+    return asset1;
+}
+
+query get_all_pair(asset: asset): list<pair_manager> {
+    val pair = get_all_pair_asset_0(asset);
+    pair.add_all(get_all_pair_asset_1(asset));
+    return pair;
+}
+
+query check_exist_pair(asset0: asset, asset1: asset): boolean {
+    val smaller_asset = get_asset_0(asset0, asset1);
+    val bigger_asset = get_asset_1(asset0, asset1);
+
+    val pair_id = (smaller_asset.id, bigger_asset.id).hash();
+
+    return pair_manager @ { .id == pair_id } ( @sum 1 ) == 1;
+}
+
+query get_force_pair(asset0: asset, asset1: asset): pair_manager {
+    val smaller_asset = get_asset_0(asset0, asset1);
+    val bigger_asset = get_asset_1(asset0, asset1);
+
+    val pair_id = (smaller_asset.id, bigger_asset.id).hash();
+
+    return pair_manager @ { .id == pair_id };
+}
+
+query get_force_pair_with_symbol(asset0_symbol: text, asset1_symbol: text): pair_manager_dto {
+    val pair_manager = get_force_pair(
+        get_asset_by_symbol(asset0_symbol),
+        get_asset_by_symbol(asset1_symbol)
+    );
+    return pair_manager_dto(
+        id = pair_manager.id,
+        asset0_symbol = pair_manager.asset0.symbol,
+        asset1_symbol = pair_manager.asset1.symbol,
+        reserve0 = pair_manager.reserve0,
+        reserve1 = pair_manager.reserve1,
+        treasury = pair_manager.treasury.id,
+        lp_asset_symbol = pair_manager.lp_asset.symbol
+    );
+}
+
+query get_pair_with_lp_asset_symbol(lp_asset_symbol: text) {
+    val pair_manager = pair_manager @? { .lp_asset.symbol == lp_asset_symbol };
+    if (pair_manager == null) return null;
+    return (
+        id = pair_manager.id,
+        asset0_symbol = pair_manager.asset0.symbol,
+        asset1_symbol = pair_manager.asset1.symbol,
+        reserve0 = pair_manager.reserve0,
+        reserve1 = pair_manager.reserve1,
+        lp_asset_symbol = pair_manager.lp_asset.symbol,
+        asset0_decimals = pair_manager.asset0.decimals,
+        asset1_decimals = pair_manager.asset1.decimals,
+        lp_asset_decimals = pair_manager.lp_asset.decimals,
+        lp_asset_total_supply = pair_manager.lp_asset.total_supply
+    );
+}
+
+query get_pair_public(asset0_symbol: text, asset1_symbol: text): pair_manager? {
+    val asset0 = get_asset_by_symbol(asset0_symbol);
+    val asset1 = get_asset_by_symbol(asset1_symbol);
+    return get_pair(asset0, asset1);
+}
+
+query get_pair(asset0: asset, asset1: asset): pair_manager? {
+    val smaller_asset = get_asset_0(asset0, asset1);
+    val bigger_asset = get_asset_1(asset0, asset1);
+
+    val pair_id = (smaller_asset.id, bigger_asset.id).hash();
+
+    return pair_manager @? { .id == pair_id };
+}
+
+query sort_asset(asset0: asset, asset1: asset): (asset, asset) {
+    val smaller_asset = get_asset_0(asset0, asset1);
+    val bigger_asset = get_asset_1(asset0, asset1);
+
+    return (smaller_asset, bigger_asset);
+}
+
+//SECTION - UniswapV2 Pair
+
+query get_reserves(pair_manager: pair_manager): (big_integer, big_integer, big_integer) {
+    return (pair_manager.reserve0, pair_manager. reserve1, pair_manager.block_timestamp_last);
+}
+
+query get_reserves_for_token(pair_manager: pair_manager, token_a: asset, token_b: asset): (big_integer, big_integer) {
+    val (reserve0, reserve1, _) = get_reserves(pair_manager);
+    if (token_a == pair_manager.asset0) {
+        return (reserve0, reserve1);
+    }
+    return (reserve1, reserve0);
+}
+
+// query get list liquidity BE 
+query get_list_liquidity(pubkey: byte_array, page: integer = 1, page_size: integer = 10) {
+    val account = get_account_by_pubkey(pubkey);
+    val filtered_liquidities = (pm: pair_manager, b: assets.balance, a0: assets.asset, a1: assets.asset) @* {
+        pm.asset0 == a0,
+        pm.asset1 == a1,
+        b.asset == pm.lp_asset,
+        b.account == account
+    } (
+        @omit @sort_desc pm.block_timestamp_last,
+        liquidity_dto (
+            pm
+            .id,
+            lp_asset_name = pm.lp_asset.name,
+            lp_asset_symbol = pm.lp_asset.symbol,
+            asset0 = asset_dto(a0.name, a0.symbol, a0.icon_url),
+            asset1 = asset_dto(a1.name, a1.symbol, a1.icon_url),
+            detail = get_liquidity_detail(account, pm)
+        )
+    );
+    val total_row = filtered_liquidities.size();
+
+    val data = filtered_liquidities @* { } offset (
+        (page - 1) * page_size
+    ) limit page_size;
+
+    val metadata_rs = get_metadata_list(total_row, page, page_size);
+
+    return list_liquidity_rs(data = data, metadata = metadata_rs);
+}
+
+function get_liquidity_detail(account: account, pair_manager: pair_manager) {
+    val asset = assets.asset @ { $ == pair_manager.lp_asset };
+    val balance = assets.get_asset_balance(account, asset);
+    val total_supply = asset.total_supply;
+    val (
+        pooled0,
+        pooled1
+    ) = get_token_amounts_remove_liquidity(
+        pair_manager
+            .asset0
+            .symbol,
+        pair_manager
+            .asset1
+            .symbol,
+        balance
+    );
+    return liquidity_detail_dto(
+        total_pool_token = balance,
+        pooled0 = pooled0,
+        pooled1 = pooled1,
+        total_supply = total_supply
+    );
+}
+
+query get_liquidity_by_symbol(pubkey: pubkey, asset_symbol: text) {
+    val account = get_account_by_pubkey(pubkey);
+    val asset = get_asset_by_symbol(asset_symbol);
+    val total_pool_token = assets.get_asset_balance(account, asset);
+    val total_supply = asset.total_supply;
+    return (total_pool_token = total_pool_token, total_supply = total_supply);
+}
+
+query get_balance_of(pubkey: pubkey, asset_symbol: text) {
+    val account = get_account_by_pubkey(pubkey);
+    val asset = get_asset_by_symbol(asset_symbol);
+    return assets.get_asset_balance(account, asset);
+}
+
+query get_list_tokens(name: text = "", page: integer = 1, page_size: integer? = 10) {
+    val list_ignore_tokens_symbol: list<text> = [];
+
+    list_ignore_tokens_symbol.add_all(
+        pair_manager @* { } (
+            .lp_asset.symbol
+        )
+    );
+
+    list_ignore_tokens_symbol.add_all(
+        mapping_token_and_x_token @* { } (
+            .x_token.symbol
+        )
+    );
+
+    val list_tokens = asset @* { .symbol not in list_ignore_tokens_symbol };
+
+    val filtered_assets = list_tokens @* {
+        if (name != "") (.name.lower_case().contains(name.trim().lower_case()) or .symbol.lower_case().contains(name.trim().lower_case()))
+        else true
+    };
+
+    val total = (filtered_assets @* { }).size();
+
+    val page_sizes = page_size ?: total;
+
+    val data = filtered_assets @* { } (
+        token_dto (
+            .name,
+            .symbol,
+            .icon_url,
+            .decimals,
+            total_supply = .total_supply.to_text(),
+            .id
+        ),
+        @omit @sort .name.lower_case()
+    ) offset (
+        (page - 1) * page_sizes
+    ) limit page_sizes;
+
+    val metadata_rs = get_metadata_list(total, page, page_sizes);
+
+    return list_tokens_rs(data = data, metadata = metadata_rs);
+}
+
+/**
+ * Retrieves token information by its address.<br>
+ * <br>
+ * @param address - The hexadecimal string representation of the token's address<br>
+ * @return A token_dto object containing the token's details if found, null otherwise<br>
+ */
+query get_token_by_address(address: text): token_dto? {
+    // Convert hex address to byte array, return null if conversion fails
+    val address_byte = try_call(byte_array.from_hex(address, *));
+    if (address_byte == null) return null;
+
+    val data = asset @? { .id == address_byte } (
+        token_dto (
+            .name,
+            .symbol,
+            .icon_url,
+            .decimals,
+            total_supply = .total_supply.to_text(),
+            .id
+        )
+    );
+    return if (data != null) data else null;
+}
+
+query get_token_detail(search: text = ""): token_dto? {
+    val data = asset @* { .symbol == search or .name == search } (
+        token_dto (
+            .name,
+            .symbol,
+            .icon_url,
+            .decimals,
+            total_supply = .total_supply.to_text(),
+            .id
+        )
+    );
+    if (data.size() == 0) return null;
+    return data[0];
+}
+
+/**
+ * Retrieves the balance of two assets in a liquidity pool by their symbols.
+ *
+ * @param asset_0_symbol - The symbol of the first asset.
+ * @param asset_1_symbol - The symbol of the second asset.
+ * @return An object containing the balances and decimals of the two assets.
+ */
+query get_asset_balance_in_pool(asset_0_symbol: text, asset_1_symbol: text) {
+    val asset_0 = get_asset_by_symbol(asset_0_symbol);
+    val asset_1 = get_asset_by_symbol(asset_1_symbol);
+    val pair = get_force_pair(asset_0, asset_1);
+    val balance_0 = get_asset_balance(pair.treasury, asset_0);
+    val balance_1 = get_asset_balance(pair.treasury, asset_1);
+    // Return the balances and decimals of the assets
+    return (
+        balance_0 = balance_0,
+        asset0_decimals = asset_0.decimals,
+        balance_1 = balance_1,
+        asset1_decimals = asset_1.decimals
+    );
+}
+
+// Query uniswap periphery V2
+
+query query_get_amounts_out(amount_in: big_integer, path: list<text>): list<big_integer> {
+    val return_data: list<big_integer> = [];
+    val temp_result = get_amounts_out(amount_in, from_assets_symbol_to_assets(path));
+    for (i in range(path.size())) {
+        return_data.add(temp_result[i].amount_in_total);
+    }
+    return return_data;
+}
+
+query query_get_amounts_in(amount_out: big_integer, path: list<text>): list<big_integer> {
+    val return_data: list<big_integer> = [];
+    val temp_result = get_amounts_in(amount_out, from_assets_symbol_to_assets(path));
+    for (i in range(path.size())) {
+        return_data.add(temp_result[i].amount_in_total);
+    }
+    return return_data;
+}
+
+/**
+ * Calculates the price impact of a trade between two assets along a specified path.
+ *
+ * @param asset_symbol_0 - The symbol of the first asset being traded.
+ * @param asset_symbol_1 - The symbol of the second asset being traded.
+ * @param delta0 - The amount of the first asset being added to the pool.
+ * @param delta1 - The amount of the second asset being removed from the pool.
+ * @param path - A list of asset symbols representing the trade path.
+ * @return The price impact of the trade as a percentage.
+ */
+query calculate_price_impact(
+    asset_symbol_0: text,
+    asset_symbol_1: text,
+    delta0: big_integer,
+    delta1: big_integer,
+    path: list<text>
+) {
+    val path_list: list<asset> = from_assets_symbol_to_assets(path);
+    if (path_list.size() == 2) {
+        return get_price_impact_direct(asset_symbol_0, asset_symbol_1, delta0, delta1);
+    }
+    return get_price_impact_sor(path, asset_symbol_0, asset_symbol_1, delta0, delta1);
+}
+
+/**
+ * Calculates the direct price impact of a trade between two assets.
+ *
+ * @param asset_symbol_0 - The symbol of the first asset.
+ * @param asset_symbol_1 - The symbol of the second asset.
+ * @param delta0 - The amount of the first asset being added to the pool.
+ * @param delta1 - The amount of the second asset being removed from the pool.
+ * @return The price impact of the trade as a percentage.
+ */
+query get_price_impact_direct(asset_symbol_0: text, asset_symbol_1: text, delta0: big_integer, delta1: big_integer) {
+    // Retrieve asset objects using their symbols
+    val asset_0 = get_asset_by_symbol(asset_symbol_0);
+    val asset_1 = get_asset_by_symbol(asset_symbol_1);
+    
+    // Get the current reserves for the token pair
+    val (reserve0, reserve1) = get_reserves_for_token(get_force_pair(asset_0, asset_1), asset_0, asset_1);
+    
+    // Ensure there is enough liquidity in the pool for the trade
+    require(reserve1 > delta1, "Insufficient liquidity in pool");
+
+    // Calculate the original price of the asset pair
+    val original_price = reserve1.to_decimal() / reserve0.to_decimal();
+
+    // Calculate the new price after the trade
+    val new_price = delta1.to_decimal() / delta0.to_decimal();
+    
+    // Calculate price impact as the percentage change from the original price
+    val price_impact = abs(1 - (new_price / original_price));
+
+    // Return the calculated price impact
+    return price_impact;
+}
+
+/**
+ * Calculates the price impact of a trade across multiple pools in a path.
+ *
+ * @param path_list - A list of asset symbols representing the trade path.
+ * @param asset_symbol_0 - The symbol of the first asset.
+ * @param asset_symbol_1 - The symbol of the second asset.
+ * @param delta0 - The amount of the first asset being added to the pool.
+ * @param delta1 - The amount of the second asset being removed from the pool.
+ * @return The overall price impact of the trade as a percentage.
+ */
+query get_price_impact_sor(
+    path_list: list<text>,
+    asset_symbol_0: text,
+    asset_symbol_1: text,
+    delta0: big_integer,
+    delta1: big_integer
+) {
+    var cumulative_impact = 1.0;
+    var amount_in = delta0;
+
+    // Iterate over the path list to calculate price impact for each segment
+    for (i in range(path_list.size()-1)) {
+        val asset_0 = get_asset_by_symbol(path_list[i]);
+        val asset_1 = get_asset_by_symbol(path_list[i + 1]);
+        val (reserve0, reserve1) = get_reserves_for_token(get_force_pair(asset_0, asset_1), asset_0, asset_1);
+        val amount_out_response = get_amount_out(amount_in, reserve0, reserve1);
+
+        // Calculate the price impact for the current segment
+        val price_impact = get_price_impact_direct(
+            asset_0
+                .symbol,
+            asset_1
+                .symbol,
+            amount_in,
+            amount_out_response
+                .amount_out
+        );
+        
+        // Update the amount in for the next segment
+        amount_in = amount_out_response.amount_out;
+
+        // Update the cumulative impact
+        cumulative_impact *= (1 - price_impact);
+    }
+    // Calculate the overall price impact
+    val overall_price_impact = (1 - cumulative_impact);
+
+    return overall_price_impact;
+}
+
+query get_token_amount_add_liquidity(
+    user: text,
+    asset_symbol_a: name,
+    asset_symbol_b: name,
+    amount_a_desired: big_integer,
+    amount_b_if_not_pair_exist: big_integer
+): add_liquidity_dto {
+    val asset_a = get_asset_by_symbol(asset_symbol_a);
+    val asset_b = get_asset_by_symbol(asset_symbol_b);
+
+    if (check_exist_pair(asset_a, asset_b) == false) {
+        return add_liquidity_dto(
+            amount_a = amount_a_desired,
+            amount_b = amount_b_if_not_pair_exist,
+            current_user_lp = 0L,
+            current_total_supply = 0L,
+            after_user_lp = sqrt_func(
+                amount_a_desired * amount_b_if_not_pair_exist
+            ) - app_meta_uniswap
+                .MINIMUM_LIQUIDITY,
+            after_total_supply = sqrt_func(
+                amount_a_desired * amount_b_if_not_pair_exist
+            ) - app_meta_uniswap
+                .MINIMUM_LIQUIDITY
+        );
+    }
+
+    // require(check_exist_pair(asset_a, asset_b), "UniswapV2: PAIR_DOES_NOT_EXIST");
+    val current_pair = get_force_pair(asset_a, asset_b);
+    val (reserve_a, reserve_b) = get_reserves_for_token(
+        current_pair,
+        asset_a,
+        asset_b
+    );
+    val amount_b_optimal = quote(amount_a_desired, reserve_a, reserve_b);
+
+    var amount_0: big_integer = 0L;
+    var amount_1: big_integer = 0L;
+    if (asset_a == current_pair.asset0) {
+        amount_0 = amount_a_desired;
+        amount_1 = amount_b_optimal;
+    } else {
+        amount_0 = amount_b_optimal;
+        amount_1 = amount_a_desired;
+    }
+    val liquidity = _view_mint(current_pair, amount_0, amount_1);
+
+    val account = get_account_by_pubkey(byte_array(user));
+
+    return add_liquidity_dto(
+        amount_a = amount_a_desired,
+        amount_b = amount_b_optimal,
+        current_user_lp = get_asset_balance(account, current_pair.lp_asset),
+        current_total_supply = current_pair.lp_asset.total_supply,
+        after_user_lp = get_asset_balance(account, current_pair.lp_asset) + liquidity,
+        after_total_supply = current_pair.lp_asset.total_supply + liquidity
+    );
+    // return amount_b_optimal;
+}
+
+query get_token_amounts_remove_liquidity(
+    asset_symbol_a: name,
+    asset_symbol_b: name,
+    liquidity: big_integer
+): (big_integer, big_integer) {
+    val asset_a = get_asset_by_symbol(asset_symbol_a);
+    val asset_b = get_asset_by_symbol(asset_symbol_b);
+    if (check_exist_pair(asset_a, asset_b) == false) {
+        return (0L, 0L);
+    }
+    val current_pair = get_force_pair(asset_a, asset_b);
+    val (reserve0, reserve1, _) = get_reserves(current_pair);
+
+    val balance0 = get_asset_balance(current_pair.treasury, current_pair.asset0);
+    val balance1 = get_asset_balance(current_pair.treasury, current_pair.asset1);
+
+    val mint_fee_lp = _view_mint_fee(current_pair, reserve0, reserve1);
+
+    val total_supply = current_pair.lp_asset.total_supply + mint_fee_lp;
+
+    val amount0 = liquidity * balance0 / total_supply; // using balances ensures pro-rata distribution
+    val amount1 = liquidity * balance1 / total_supply; // using balances ensures pro-rata distribution
+
+    if (asset_a == current_pair.asset0) {
+        return (amount0, amount1);
+    }
+    return (amount1, amount0);
+}
+
+query get_token_amounts_remove_liquidity_with_user(
+    user: text,
+    asset_symbol_a: name,
+    asset_symbol_b: name,
+    liquidity: big_integer
+): remove_liquidity_dto {
+    val account = get_account_by_pubkey(byte_array(user));
+    val asset_a = get_asset_by_symbol(asset_symbol_a);
+    val asset_b = get_asset_by_symbol(asset_symbol_b);
+    require(check_exist_pair(asset_a, asset_b), "UniswapV2: PAIR_DOES_NOT_EXIST");
+    val current_pair = get_force_pair(asset_a, asset_b);
+    val (reserve0, reserve1, _) = get_reserves(current_pair);
+
+    val balance0 = get_asset_balance(current_pair.treasury, current_pair.asset0);
+    val balance1 = get_asset_balance(current_pair.treasury, current_pair.asset1);
+
+    val mint_fee_lp = _view_mint_fee(current_pair, reserve0, reserve1);
+
+    val total_supply = current_pair.lp_asset.total_supply + mint_fee_lp;
+
+    val amount0 = liquidity * balance0 / total_supply; // using balances ensures pro-rata distribution
+    val amount1 = liquidity * balance1 / total_supply; // using balances ensures pro-rata distribution
+
+    if (asset_a == current_pair.asset0) {
+        return remove_liquidity_dto(
+            current_user_lp = get_asset_balance(account, current_pair.lp_asset),
+            current_total_supply = current_pair.lp_asset.total_supply,
+            after_user_lp = get_asset_balance(account, current_pair.lp_asset) - liquidity,
+            after_total_supply = current_pair.lp_asset.total_supply - liquidity,
+            amount_a = amount0,
+            amount_b = amount1,
+            liquidity = liquidity
+        );
+    }
+    return remove_liquidity_dto(
+        current_user_lp = get_asset_balance(account, current_pair.lp_asset),
+        current_total_supply = current_pair.lp_asset.total_supply,
+        after_user_lp = get_asset_balance(account, current_pair.lp_asset) - liquidity,
+        after_total_supply = current_pair.lp_asset.total_supply - liquidity,
+        amount_a = amount1,
+        amount_b = amount0,
+        liquidity = liquidity
+    );
+}
+
+query get_all_pool() {
+    return (pm: pair_manager, a0: assets.asset, a1: assets.asset) @* {
+        pm.asset0 == a0,
+        pm.asset1 == a1
+    } (
+        token0 = a0.symbol,
+        token1 = a1.symbol,
+        reserve0 = pm.reserve0,
+        reserve1 = pm.reserve1,
+        lp_asset_symbol = pm.lp_asset.symbol,
+        lp_asset_decimals = pm.lp_asset.decimals,
+        total_supply = pm.lp_asset.total_supply
+    );
+}
+
+query get_all_asset() {
+    return asset @* { } (
+        .name,
+        .symbol,
+        .icon_url,
+        .decimals,
+        .id,
+        .rowid,
+        total_supply = .total_supply.to_text(),
+        circulating_supply = .total_supply.to_text()
+    );
+}
+
+query get_uniswap_history_transactions(last_rowid: rowid) {
+    val data = uniswap_history_transaction @* { .rowid > last_rowid } (
+        transaction = .transaction,
+        timestamp = .transaction.block.timestamp,
+        token0 = .token0.symbol,
+        token1 = .token1.symbol,
+        amount0 = .amount0.to_text(),
+        amount1 = .amount1.to_text(),
+        amount_lp = .amount_lp.to_text(),
+        .type,
+        .rowid,
+        tx_hash = .transaction.tx_hash
+    );
+
+    return data;
+}
+
+query get_fee_and_reward_in_24h(current_time_in_seconds: big_integer) {
+    val start_time_in_ms = (current_time_in_seconds - 86400) * 1000;
+
+    val result: list<uniswap_fee_and_reward_dto> = [];
+    val all_pair = pair_manager @* { };
+
+    for (pair in all_pair) {
+        // get fee and reward 0 in 24h 
+        val data_0 = uniswap_history_transaction @* {
+            .transaction.block.timestamp >= start_time_in_ms 
+        and .token0 == pair.asset0 and .token1 == pair.asset1 and .type == uniswap_history_type.swap
+        } (
+            @sum .total_fee,
+            @sum .fee_for_liquidity_provider
+        );
+        // get fee and reward 1 in 24h
+        val data_1 = uniswap_history_transaction @* {
+            .transaction.block.timestamp >= start_time_in_ms 
+        and .token0 == pair.asset1 and .token1 == pair.asset0 and .type == uniswap_history_type.swap
+        } (
+            @sum .total_fee,
+            @sum .fee_for_liquidity_provider
+        );
+
+        print("data_0", data_0);
+        print("data_1", data_1);
+
+        val test_data_0 = uniswap_history_transaction @* {
+            .transaction.block.timestamp >= start_time_in_ms 
+        and .token0 == pair.asset0 and .token1 == pair.asset1 and .type == uniswap_history_type.swap
+        } (
+            .total_fee,
+            .fee_for_liquidity_provider
+        );
+        // get fee and reward 1 in 24h
+        val test_data_1 = uniswap_history_transaction @* {
+            .transaction.block.timestamp >= start_time_in_ms 
+        and .token1 == pair.asset1 and .type == uniswap_history_type.swap
+        } (
+            token0 = .token0.symbol,
+            token1 = .token1.symbol,
+            total_fee = .total_fee,
+            fee_for_liquidity_provider = .fee_for_liquidity_provider
+        );
+
+        print("test_data_0", test_data_0);
+        print("test_data_1", test_data_1);
+
+        result.add(
+            uniswap_fee_and_reward_dto(
+                pair_manager_id = pair.id,
+                token0_symbol = pair.asset0.symbol,
+                token1_symbol = pair.asset1.symbol,
+                fee_0 = data_0[0][0],
+                fee_1 = data_1[0][0],
+                reward_0 = data_0[0][1],
+                reward_1 = data_1[0][1],
+                reserve0 = pair.reserve0,
+                reserve1 = pair.reserve1
+            )
+        );
+    }
+    return result;
+}
+
+/**
+ * Finds a route for swapping a given amount of an asset to another asset.
+ *
+ * @param amount_out - The desired amount of the output asset.
+ * @param from - The symbol of the asset to swap from.
+ * @param to - The symbol of the asset to swap to.
+ * @return A tuple containing the path of asset symbols and the resulting amounts in.
+ */
+query find_route_in(amount_out: big_integer, from: text, to: text): (paths: list<text>, amounts: list<big_integer>) {
+    // Retrieve asset objects using their symbols
+    val asset_from = get_asset_by_symbol(from);
+    val asset_to = get_asset_by_symbol(to);
+
+    // Get all pairs from the pair manager
+    val list_pair = pair_manager @* { } ( @omit @sort .rowid, $ );
+
+    // List to store intermediate assets for potential multi-hop route from
+    val list_intermediate_from: list<asset> = [];
+
+    // List to store intermediate assets for potential multi-hop route to
+    val list_intermediate_to: list<asset> = [];
+
+    // Check for direct pair between the two assets
+    for (pair in list_pair) {
+        if (
+            (pair.asset0 == asset_from and pair.asset1 == asset_to)
+            or
+            (pair.asset1 == asset_from and pair.asset0 == asset_to)
+        ) {
+            // If a direct pair exists, attempt to get the amounts in
+            val path = [asset_from.symbol, asset_to.symbol];
+            val result = try_call(
+                query_get_amounts_in(
+                    amount_out,
+                    path,
+                    *
+                )
+            );
+            if (result != null) {
+                // Return the path and result if successful
+                return (paths = path, amounts = result);
+            }
+        }
+        // Collect intermediate assets for potential multi-hop route from
+        if (pair.asset0 == asset_from) {
+            list_intermediate_from.add(pair.asset1);
+        } else if (pair.asset1 == asset_from) {
+            list_intermediate_from.add(pair.asset0);
+        }
+
+        // Collect intermediate assets for potential multi-hop route to
+        if (pair.asset0 == asset_to) {
+            list_intermediate_to.add(pair.asset1);
+        } else if (pair.asset1 == asset_to) {
+            list_intermediate_to.add(pair.asset0);
+        }
+    }
+
+    // Check for multi-hop routes using intermediate assets
+    for (intermediate_from in list_intermediate_from) {
+        if (list_intermediate_to.contains(intermediate_from)) {
+            // If a valid multi-hop route is found, attempt to get the amounts in
+            val path = [asset_from.symbol, intermediate_from.symbol, asset_to.symbol];
+            val result = try_call(
+                query_get_amounts_in(
+                    amount_out,
+                    path,
+                    *
+                )
+            );
+            if (result != null) {
+                // Return the path and result if successful
+                return (paths = path, amounts = result);
+            }
+        }
+    }
+
+    // Return empty lists if no valid route is found
+    return (paths = list<text>(), amounts = list<big_integer>());
+}
+
+/**
+ * Finds a route for swapping a given amount of an asset to another asset.
+ *
+ * @param amount_in - The amount of the input asset to be swapped.
+ * @param from - The symbol of the asset to swap from.
+ * @param to - The symbol of the asset to swap to.
+ * @return A tuple containing the path of asset symbols and the resulting amounts out.
+ */
+query find_route_out(amount_in: big_integer, from: text, to: text): (paths: list<text>, amounts: list<big_integer>) {
+    // Retrieve asset objects using their symbols
+    val asset_from = get_asset_by_symbol(from);
+    val asset_to = get_asset_by_symbol(to);
+
+    // Get all pairs from the pair manager
+    val list_pair = pair_manager @* { } ( @omit @sort .rowid, $ );
+
+    // List to store intermediate assets for potential multi-hop route from
+    val list_intermediate_from: list<asset> = [];
+
+    // List to store intermediate assets for potential multi-hop route to
+    val list_intermediate_to: list<asset> = [];
+
+    // Check for direct pair between the two assets
+    for (pair in list_pair) {
+        if (
+            (pair.asset0 == asset_from and pair.asset1 == asset_to)
+            or
+            (pair.asset1 == asset_from and pair.asset0 == asset_to)
+        ) {
+            // If a direct pair exists, attempt to get the amounts out
+            val path = [asset_from.symbol, asset_to.symbol];
+            val result = try_call(
+                query_get_amounts_out(
+                    amount_in,
+                    path,
+                    *
+                )
+            );
+            if (result != null) {
+                // Return the path and result if successful
+                return (paths = path, amounts = result);
+            }
+        }
+        // Collect intermediate assets for potential multi-hop route from
+        if (pair.asset0 == asset_from) {
+            list_intermediate_from.add(pair.asset1);
+        } else if (pair.asset1 == asset_from) {
+            list_intermediate_from.add(pair.asset0);
+        }
+
+        // Collect intermediate assets for potential multi-hop route to
+        if (pair.asset0 == asset_to) {
+            list_intermediate_to.add(pair.asset1);
+        } else if (pair.asset1 == asset_to) {
+            list_intermediate_to.add(pair.asset0);
+        }
+    }
+
+    // Check for multi-hop routes using intermediate assets
+    for (intermediate_from in list_intermediate_from) {
+        if (list_intermediate_to.contains(intermediate_from)) {
+            // If a valid multi-hop route is found, attempt to get the amounts out
+            val path = [asset_from.symbol, intermediate_from.symbol, asset_to.symbol];
+            val result = try_call(
+                query_get_amounts_out(
+                    amount_in,
+                    path,
+                    *
+                )
+            );
+            if (result != null) {
+                    // Return the path and result if successful
+                return (paths = path, amounts = result);
+            }
+        }
+    }
+
+    // Return empty lists if no valid route is found
+    return (paths = list<text>(), amounts = list<big_integer>());
+}

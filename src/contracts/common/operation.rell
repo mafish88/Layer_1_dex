@@ -1,0 +1,198 @@
+import lib.ft4.core.accounts.{
+    update_main_auth_descriptor, 
+    get_flags_from_args, 
+    auth_descriptor, 
+    account_auth_descriptor, 
+    get_signers_from_encoded_auth_descriptor,
+    multi_sig_auth_descriptor,
+    auth_type,
+    multi_sig_args    
+};
+
+import lib.ft4.external.accounts. {get_account_by_id, get_account_auth_descriptors};
+
+import contracts.credits.*;
+
+function get_auth_from_current_desc_with_add(current_desc: account_auth_descriptor, added_flag: text): auth_descriptor {
+    var current_flags = get_flags_from_args(current_desc.auth_type, current_desc.args);
+    current_flags.add(added_flag);
+    val signers = get_signers_from_encoded_auth_descriptor(current_desc.auth_type, current_desc.args);
+    var signature_required = 1;
+    if (current_desc.auth_type == auth_type.M) {
+        val multi_sign_args = multi_sig_args.from_bytes(current_desc.args);
+        signature_required = multi_sign_args.signatures_required;
+    }
+    return when (current_desc.auth_type) {
+        S -> single_sig_auth_descriptor(signers[0], set(current_flags));
+        M -> multi_sig_auth_descriptor(signers, signature_required, set(current_flags));
+    };
+}
+
+function get_auth_from_current_desc_with_remove(current_desc: account_auth_descriptor, removed: text): auth_descriptor {
+    var current_flags = get_flags_from_args(current_desc.auth_type, current_desc.args);
+    current_flags.remove(removed);
+    val signers = get_signers_from_encoded_auth_descriptor(current_desc.auth_type, current_desc.args);
+    var signature_required = 1;
+    if (current_desc.auth_type == auth_type.M) {
+        val multi_sign_args = multi_sig_args.from_bytes(current_desc.args);
+        signature_required = multi_sign_args.signatures_required;
+    }
+    return when (current_desc.auth_type) {
+        S -> single_sig_auth_descriptor(signers[0], set(current_flags));
+        M -> multi_sig_auth_descriptor(signers, signature_required, set(current_flags));
+    };
+}
+
+function check_admin_signer_evm() {
+    val account_admin = auth.authenticate();
+
+    val get_current_desc = accounts.main_auth_descriptor @ {
+        .account.id == account_admin.id
+    };
+
+    print("get_current_desc", get_current_desc);
+    val admin_signers = accounts.get_signers(
+        auth_descriptor(
+            auth_type = get_current_desc.auth_descriptor.auth_type,
+            args = list<gtv>.from_gtv(gtv.from_bytes(get_current_desc.auth_descriptor.args)),
+            rules = gtv.from_bytes(get_current_desc.auth_descriptor.rules)
+        )
+    );
+
+    print("admin_signers", admin_signers[0]);
+    require(admin_signers[0] == get_module_args().admin_evm_address, "Not admin");
+}
+
+operation add_operator(new_operator: text) {
+    check_admin_signer_evm();
+    // active_flag_operator(new_operator);
+
+    val account = get_account_by_pubkey(byte_array(new_operator));
+
+    // account must not exist in operator table
+    val operator_finding = operator @? { .account == account };
+    require(operator_finding == null, "Account already in operator");
+    create operator ( account );
+}
+
+operation active_operator(operator_id: text) {
+    check_admin_signer_evm();
+    // active_flag_operator(operator_id);
+
+    val operator_finding = operator @? { .account == get_account_by_pubkey(byte_array(operator_id)) };
+    require(operator_finding != null and operator_finding.status == false, "Account not in operator");
+    update operator_finding ( .status = true );
+}
+
+operation inactive_operator(operator_id: text) {
+    check_admin_signer_evm();
+    // inactive_flag_operator(operator_id);
+
+    val operator_finding = operator @? { .account == get_account_by_pubkey(byte_array(operator_id)) };
+    require(operator_finding != null and operator_finding.status == true, "Account not in operator");
+    update operator_finding ( .status = false );
+}
+
+operation remove_operator(old_operator: text) {
+    check_admin_signer_evm();
+    // inactive_flag_operator(old_operator);
+
+    val account = get_account_by_pubkey(byte_array(old_operator));
+    // account must not exist in operator table
+    val operator_finding = operator @? { .account == account };
+    require(operator_finding != null, "Account not in operator");
+
+    delete operator @ { account };
+}
+
+function active_flag_operator(operator: text) {
+    val account = get_account_by_pubkey(byte_array(operator));
+
+    val current_desc = account_auth_descriptor @* { account }[0];
+
+    val flags = get_flags_from_args(current_desc.auth_type, current_desc.args);
+
+    // check already have that operator role or not
+    require(
+        flags.contains("OPERATOR") == false,
+        "Already set Operator"
+    );
+
+    print("current_desc", current_desc);
+    update_main_auth_descriptor(
+        account,
+        get_auth_from_current_desc_with_add(
+            current_desc,
+            "OPERATOR"
+        )
+    );
+}
+
+function inactive_flag_operator(operator: text) {
+    val account = get_account_by_pubkey(byte_array(operator));
+
+    val current_desc = account_auth_descriptor @* { account }[0];
+
+    val flags = get_flags_from_args(current_desc.auth_type, current_desc.args);
+
+    // check already have that operator role or not
+    if (flags.contains("OPERATOR") == false) {
+        return;
+    }
+
+    update_main_auth_descriptor(
+        account,
+        get_auth_from_current_desc_with_remove(
+            current_desc,
+            "OPERATOR"
+        )
+    );
+}
+
+operation register_asset_by_operator(
+    asset_name: text,
+    asset_symbol: text,
+    asset_decimals: integer,
+    asset_icon: text
+) {
+    val account = auth.authenticate();
+
+    assets.Unsafe.register_asset(
+            asset_name,
+            asset_symbol,
+            asset_decimals,
+            chain_context.blockchain_rid,
+            asset_icon
+        );
+
+}
+
+operation register_crosschain_asset_by_operator(
+    name: text,
+    symbol: text,
+    decimals: integer,
+    issuing_blockchain_rid: byte_array,
+    icon_url: text,
+    origin_blockchain_rid: byte_array
+) {
+    val account = auth.authenticate();
+
+    val asset = assets.crosschain.asset_origin @? { .asset.symbol == symbol };
+    require(asset == null, "ASSET_ALREADY_EXISTS");
+
+    val asset_id = (name, origin_blockchain_rid).hash();
+    val type = assets.ASSET_TYPE_FT4;
+    val uniqueness_resolver = byte_array("");
+
+    crosschain.Unsafe.register_crosschain_asset(
+            asset_id,
+            name,
+            symbol,
+            decimals,
+            issuing_blockchain_rid,
+            icon_url,
+            type,
+            uniqueness_resolver,
+            origin_blockchain_rid
+        );
+}

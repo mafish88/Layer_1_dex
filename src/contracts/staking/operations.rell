@@ -1,0 +1,159 @@
+operation init_staking() {
+    admin.require_admin();
+    get_or_create_account(admin.get_admin_pubkey(), true);
+    val acc_staking = get_or_create_account(get_module_args().staking_account_treasury, true);
+
+    val staking_treasury = ensure_lock_account(
+        "STAKING_TREASURY",
+        acc_staking
+    );
+}
+
+operation add_staking_pair(asset_symbol: name) {
+    val caller = auth.authenticate();
+
+    val asset = get_asset_by_symbol(asset_symbol);
+    // no need to check if asset in pair because it will be duplicate db
+
+    val x_asset_name = "x" + asset.name;
+    val x_asset_symbol = "x" + asset.symbol;
+
+    assets
+        .Unsafe
+        .register_asset(
+            x_asset_name,
+            x_asset_symbol,
+            asset
+                .decimals,
+            chain_context
+                .blockchain_rid,
+            asset
+                .icon_url
+        );
+
+    val x_asset = get_asset(x_asset_name);
+
+    create mapping_token_and_x_token (
+        token = asset,
+        x_token = x_asset
+    );
+}
+
+operation enter(asset_symbol: name, amount: big_integer) {
+
+    val caller = auth.authenticate();
+
+    val asset = get_asset_by_symbol(asset_symbol);
+
+    val is_exist = check_exist_staking_token(asset);
+    if (not is_exist) {
+        return;
+    }
+    val mapping_token_and_x_token = get_force_mapping_token_and_x_token(asset);
+
+    val treasury = get_account_by_pubkey(get_lock_acc_from_staking_acc_treasury());
+
+    val total_token_in_pool = get_asset_balance(treasury, asset);
+    val total_x_token = mapping_token_and_x_token.x_token.total_supply;
+
+    var amount_x_token: big_integer;
+
+    if (total_x_token == 0 or total_token_in_pool == 0) {
+        assets.Unsafe.mint(caller, mapping_token_and_x_token.x_token, amount);
+        amount_x_token = amount;
+    } else {
+        amount_x_token = amount * total_x_token / total_token_in_pool;
+        assets.Unsafe.mint(caller, mapping_token_and_x_token.x_token, amount_x_token);
+    }
+
+    assets.Unsafe.transfer(caller, treasury, asset, amount);
+
+    create staking_history (
+        caller,
+        mapping_token_and_x_token,
+        amount_token = amount,
+        amount_x_token = amount_x_token,
+        staking_history_type.stake
+    );
+}
+
+operation exit(asset_symbol: name, amount_x_asset: big_integer) {
+    val caller = auth.authenticate();
+
+    val asset = get_asset_by_symbol(asset_symbol);
+    val is_exist = check_exist_staking_token(asset);
+    if (not is_exist) {
+        return;
+    }
+    val mapping_token_and_x_token = get_force_mapping_token_and_x_token(asset);
+
+    val treasury = get_account_by_pubkey(get_lock_acc_from_staking_acc_treasury());
+
+    val total_token_in_pool = get_asset_balance(treasury, asset);
+    val total_x_token = mapping_token_and_x_token.x_token.total_supply;
+
+    val return_token = amount_x_asset * total_token_in_pool / total_x_token;
+
+    assets.Unsafe.burn(caller, mapping_token_and_x_token.x_token, amount_x_asset);
+
+    assets.Unsafe.transfer(treasury, caller, asset, return_token);
+
+    create staking_history (
+        caller,
+        mapping_token_and_x_token,
+        amount_token = return_token,
+        amount_x_token = amount_x_asset,
+        staking_history_type.unstake
+    );
+}
+
+operation admin_withdraw_swap_fee(asset_symbol: name) {
+    val caller = auth.authenticate();
+
+    val amount = get_asset_balance(
+        get_account_by_pubkey(get_lock_acc_from_uniswap_acc_treasury()),
+        get_asset_by_symbol(asset_symbol)
+    );
+
+    assets.Unsafe.transfer(
+            get_account_by_pubkey(get_lock_acc_from_uniswap_acc_treasury()),
+            get_account_by_pubkey(get_lock_acc_from_staking_acc_treasury()),
+            get_asset_by_symbol(asset_symbol),
+            amount
+        );
+}
+
+/**
+ * This operation allows an authenticated user to withdraw all fees from the Uniswap treasury<br>
+ *              and transfer them to the staking treasury. It iterates over all assets in the Uniswap treasury<br>
+ *              with a positive balance and transfers each to the staking treasury.
+ */
+operation admin_withdraw_all_swap_fee() {
+    // Authenticate the caller and ensure they have the necessary permissions
+    val caller = auth.authenticate();
+
+    // Retrieve the Uniswap and staking treasury accounts
+    val uniswap_treasury = get_account_by_pubkey(get_lock_acc_from_uniswap_acc_treasury());
+    val staking_treasury = get_account_by_pubkey(get_lock_acc_from_staking_acc_treasury());
+
+    // Get all assets in the Uniswap treasury with a positive balance
+    val all_asset_in_treasury = assets.balance @* {
+            .account == uniswap_treasury,
+            .amount > 0
+        } ( .asset, .amount );
+
+    // If there are no assets in the Uniswap treasury, return
+    if (all_asset_in_treasury.size() == 0) {
+        return;
+    }
+
+    // Transfer each asset from the Uniswap treasury to the staking treasury
+    for ((asset, amount) in all_asset_in_treasury) {
+        assets.Unsafe.transfer(
+                uniswap_treasury,
+                staking_treasury,
+                asset,
+                amount
+            );
+    }
+}
