@@ -11,7 +11,7 @@ blockchains:
           max_number_per_account: 4
           max_rules: 4
       lib.ft4.core.admin:
-        admin_pubkey: 02697A349D92481F231D5154975F951591EB60A6D386904AD7B26429CBA39B0E06
+        admin_pubkey: 02DB5928F39AABDFFF9A5C37944ACA7A8576B4E19F1E6C95AE1DFD3D29269C4C58
   dex_cp1:
     config:
       gtx:
